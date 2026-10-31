@@ -65,6 +65,9 @@ jobs:
         timeout-minutes: 15
 
       - name: 构建页面
+        # runner 默认 UTC，会让 version.txt 和「打包于」时间戳比北京时间慢 8 小时
+        env:
+          TZ: Asia/Shanghai
         run: python build.py
 
       - name: 提交并推送
