@@ -70,11 +70,27 @@ jobs:
           TZ: Asia/Shanghai
         run: python build.py
 
+      # 页面本体是 3.4MB 的自包含 HTML，数值全在 JS 变量里、图表是 canvas，
+      # AI 的网页抓取器读不到任何一个数字。这里从 data.json 反推一份纯文本摘要
+      # (llms.txt / snapshot.md / latest.json)，让任何大模型一次就能读完当日读数。
+      - name: 生成 AI 可读摘要
+        env:
+          TZ: Asia/Shanghai
+        run: |
+          if [ -f data.json ]; then
+            python make_llm_summary.py
+          else
+            echo "data.json 缺失，跳过摘要生成"
+            exit 0
+          fi
+
       - name: 提交并推送
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
           git add index.html data.json data.js version.txt cache/
+          # AI 可读摘要（llms.txt 是 2024 年提出的约定文件名，部分工具会自动探测）
+          git add llms.txt snapshot.md latest.json
           if git diff --staged --quiet; then
             echo "内容未变化，跳过提交。"
           else
