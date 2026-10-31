@@ -47,6 +47,11 @@ jobs:
 
       - name: 抓取数据
         id: fetch
+        # 关键：data.json 的 updated 字段由本步骤写入（datetime.now()），
+        # runner 默认 UTC，不设这时区会让页面顶部「数据更新」和 version.txt
+        # 都显示比北京时间早 8 小时的值。
+        env:
+          TZ: Asia/Shanghai
         run: |
           # 检查缓存是否充足（git checkout 自带完整缓存，actions/cache 作为加速）
           CSI_COUNT=$(find cache -maxdepth 1 -name "csi*.csv" 2>/dev/null | wc -l)
