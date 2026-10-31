@@ -1,0 +1,80 @@
+name: 每日自动更新看板
+
+on:
+  # 每天 18:30（北京时间）自动更新一次。cron 写 UTC，北京 = UTC+8，故 10:30 UTC。
+  #
+  # 【关于原作者为何停用、而这里可以开启】
+  # 原作者在 2026-09-18 关掉了云端定时任务，原因是「本机 + 云端双写」互相覆盖：
+  #   1) 云端 checkout 仓库里的 template.html 重建 index.html，会覆盖本机用新版模板推出的完整版；
+  #   2) 云端不推 version.txt，前端版本探针读到旧版本号 → 误判「已是最新」，问题被锁死。
+  # 本仓库是「云端单写」：没有任何本机计划任务往这里推，template.html 与 index.html
+  # 始终由同一次构建产出，因此不存在上述冲突。
+  # 另：Action 的提交已包含 version.txt，版本探针能正常推进。
+  schedule:
+    - cron: '30 10 * * *'   # 18:30 北京 每天一次
+  workflow_dispatch:   # 手动触发
+
+permissions:
+  contents: write
+
+jobs:
+  update:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+      - name: 检出仓库
+        uses: actions/checkout@v4
+
+      - name: 安装 Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: 安装依赖
+        run: pip install requests numpy pandas akshare
+
+      # 缓存作为加速层（cache miss 时靠 git checkout 的缓存文件兜底）
+      - name: 恢复缓存
+        uses: actions/cache@v4
+        id: cache
+        with:
+          path: cache
+          key: etf-cache-v2
+
+      - name: 保证 cache 目录存在
+        run: mkdir -p cache
+
+      - name: 抓取数据
+        id: fetch
+        run: |
+          # 检查缓存是否充足（git checkout 自带完整缓存，actions/cache 作为加速）
+          CSI_COUNT=$(find cache -maxdepth 1 -name "csi*.csv" 2>/dev/null | wc -l)
+          echo "cache 中 csi*.csv 数量: $CSI_COUNT"
+
+          if [ "$CSI_COUNT" -ge 15 ]; then
+            echo "=== 日常增量模式 ==="
+            python fetch_data.py --quick
+          elif [ "$CSI_COUNT" -ge 3 ]; then
+            echo "=== 准冷启动（缓存部分可用，全量但有断点续跑） ==="
+            python fetch_data.py
+          else
+            echo "=== 完整冷启动（缓存不足，全量回填） ==="
+            python fetch_data.py
+          fi
+        timeout-minutes: 15
+
+      - name: 构建页面
+        run: python build.py
+
+      - name: 提交并推送
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add index.html data.json data.js version.txt cache/
+          if git diff --staged --quiet; then
+            echo "内容未变化，跳过提交。"
+          else
+            git commit -m "chore: 自动更新 $(TZ=Asia/Shanghai date +%Y-%m-%d\ %H:%M)"
+            git push
+          fi
