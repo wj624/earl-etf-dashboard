@@ -12,6 +12,59 @@
 
 ---
 
+## 直达链接（可直接复制）
+
+| 用途 | 地址 |
+|---|---|
+| **看板主页**（人看） | <https://wj624.github.io/earl-etf-dashboard/> |
+| 五年之锚 v2 独立页 | <https://wj624.github.io/earl-etf-dashboard/anchor_v2.html> |
+| **给 AI 的文本摘要**（推荐发这个） | <https://wj624.github.io/earl-etf-dashboard/llms.txt> |
+| 同一份摘要的 Markdown 版 | <https://wj624.github.io/earl-etf-dashboard/snapshot.md> |
+| 精简机器数据（7.6KB） | <https://wj624.github.io/earl-etf-dashboard/latest.json> |
+| 全量机器数据（2.2MB） | <https://wj624.github.io/earl-etf-dashboard/data.json> |
+| 源码仓库 | <https://github.com/wj624/earl-etf-dashboard> |
+
+一次性复制全部地址：
+
+```text
+看板主页        https://wj624.github.io/earl-etf-dashboard/
+五年之锚 v2     https://wj624.github.io/earl-etf-dashboard/anchor_v2.html
+给 AI 的摘要    https://wj624.github.io/earl-etf-dashboard/llms.txt
+摘要 Markdown   https://wj624.github.io/earl-etf-dashboard/snapshot.md
+精简数据        https://wj624.github.io/earl-etf-dashboard/latest.json
+全量数据        https://wj624.github.io/earl-etf-dashboard/data.json
+源码仓库        https://github.com/wj624/earl-etf-dashboard
+```
+
+### 为什么需要「给 AI 的摘要」这几个文件
+
+主页面是一个 3.4MB 的自包含 HTML，**AI 抓取器读不到里面的数字**，实测：
+
+| 项目 | 实测 |
+|---|---|
+| `index.html` 总字符 | 3,437,505 |
+| 其中 3 个 `<script>` | 3,351,767（占 97.8%） |
+| 剥掉脚本后的纯文本 | 仅 13,258 字符 |
+| 静态 HTML 里能否搜到当前读数 | **不能**（`257.6`、`42.69`、`4.49` 全部搜不到） |
+
+三个原因：
+
+1. **数值全在 JS 变量里**——所有读数存在 `window.DATA` 这个 2.2MB 的对象中，不执行 JavaScript 的抓取器只能看到 `m14:{ratio:257.6,...}` 这样的裸代码；
+2. **图是 canvas 画的**——ECharts 把曲线画进位图，DOM 里没有任何 `<text>`，就算执行了 JS 也抓不到文字；
+3. **体积超限**——3.4MB 超过多数 AI 网页抓取工具 1MB 左右的正文阈值。
+
+所以每日构建会额外产出三份纯文本：
+
+| 文件 | 大小 | 内容 |
+|---|---|---|
+| `llms.txt` | 8.6KB | 20 个指标的当前读数 + 各自数据截止日 + 判读口径 + 交叉判读提示 + 名词速查 |
+| `snapshot.md` | 8.6KB | 同上内容的 Markdown 版（在 GitHub 上可直接渲染阅读） |
+| `latest.json` | 7.6KB | 同上内容的结构化版本，字段与 `data.json` 的 `cur` 一致 |
+
+**用法**：把 `llms.txt` 的地址发给大模型（或直接把全文贴进对话框），它就能真的回答「现在 A 股什么位置」，而不只是复述指标定义。
+
+---
+
 # 第一部分 · 先搞懂五个基础概念
 
 这一节比后面的指标列表更重要。看不懂指标，通常是这几个概念没通。
@@ -521,6 +574,10 @@ python backfill.py 2              # 中证官网补洞守护进程，最多跑 2
 | `cache/` | 本地数据缓存（CSV，断点续传）。**勿删**，删了要全量重抓 |
 | `echarts.min.js` | 本地 ECharts 源文件（构建时内联） |
 | `version.txt` | 版本探针，内容 = `data.json` 的 updated 时间 |
+| `make_llm_summary.py` | 从 `data.json` 生成下面三个纯文本摘要文件（每日构建时自动跑） |
+| `llms.txt` | **构建产物**：给 AI 读的当日数据摘要，见顶部「直达链接」 |
+| `snapshot.md` | **构建产物**：同上内容的 Markdown 版 |
+| `latest.json` | **构建产物**：同上内容的结构化版本（约 7.6KB） |
 | `.github/workflows/update.yml` | 每日自动更新工作流 |
 
 ---
@@ -532,6 +589,8 @@ python backfill.py 2              # 中证官网补洞守护进程，最多跑 2
 3. **改动后如果页面出现「数据补充中」空白卡**，通常是 `template.html` 与 `index.html` 不同步，跑一次 `python build.py` 即可。
 4. **提交内容里必须包含 `version.txt`**，否则前端版本探针会卡在旧版本。
 5. **Wind 专有指数（M1/M3/M5 的部分腿）是缓存的**，不随每日更新变化。如果某天这些图日期明显偏旧，属正常现象，需要手动从 Wind 拉一次。
+6. **新增指标时，`make_llm_summary.py` 的 `META` 和 `reading()` 要同步改。** `META` 决定该指标在摘要里叫什么、归到哪一组、判读口径怎么写；`reading()` 决定它的读数怎么压成一行。漏改不会报错，但摘要里那一行会显示「（读取失败：…）」并把原始 JSON 附上。
+7. **摘要文件是构建产物，不要手改。** 改了下次构建会被覆盖；要调整内容请改 `make_llm_summary.py`，本地先跑 `python make_llm_summary.py --check` 预览，满意再正式生成。
 
 ---
 
