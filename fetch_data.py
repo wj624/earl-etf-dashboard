@@ -509,15 +509,24 @@ def fetch_all(deep=True):
         _lagtxt = ", ".join(k + "=" + (d or "无缓存") for k, d in lagging)
         log(f"  抓取顺序（最落后优先）：{_lagtxt} …")
 
+    _SEEN = {}      # 本轮已抓过的 (源, 代码) -> DataFrame
     for key, (name, cands) in items:
         got, src = None, None
         for st, code, same in cands:
-            if st == "csi":
-                df = fetch_csi(code, deep=deep)
-            elif st == "cni":
-                df = fetch_cni(code)
+            # 同一轮里同一个代码只真抓一次：931586 既作「300价值稳健」又作
+            # 「300价值稳健全收益」的首选源，不缓存就会多打一次请求 + 多等一个 SLEEP
+            # （3.5s），还白白多一次撞中证 403 的机会。
+            _ck2 = f"{st}{code}"
+            if _ck2 in _SEEN:
+                df = _SEEN[_ck2]
             else:
-                df = fetch_tx(code)
+                if st == "csi":
+                    df = fetch_csi(code, deep=deep)
+                elif st == "cni":
+                    df = fetch_cni(code)
+                else:
+                    df = fetch_tx(code)
+                _SEEN[_ck2] = df
             if df is None or len(df) < 250:
                 continue
             if got is None:
