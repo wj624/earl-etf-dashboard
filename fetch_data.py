@@ -172,12 +172,21 @@ def csi_sess(force=False):
     return _csi
 
 
-# [是否已判定本次运行被封, 连续403的“不同代码”数, 上一个触发 403 的代码]
+# [是否已判定本次运行被封, 本轮触发 403 的“不同代码”数, 上一个触发 403 的代码]
 CSI_BLOCKED = [False, 0, None]
+CSI_BAD = set()              # 本轮已确认 403 的代码 → 后续再遇到直接跳过，不再白等退避
 # 中证官网 403 是 IP 级临时限流：同一秒的另一个指数请求照样 403，逐个重试纯属浪费。
 # 实测（2026-09-17）连续 4 次 403 各退避 50s = 白等 205s，占整轮 439s 的 47%。
-# ⇒ 阈值降到 2（只给一次短期重试机会），并把限流状态落盘做冷却，避免同一小时内多轮重复撞墙。
-CSI_BLOCKED_THRESHOLD = 2
+#
+# 【2026-11-01 修订】原规则是「不同代码各撞一次 403，累计到 2 就全局熔断」，实测会误伤：
+#   run 41282897642 里 931591 这一只连撞 3 次 403，熔断随即打开，排在它后面的
+#   931588CNY01(m6b) / 931589 / 930903(m9) 全部被跳过、沿用 10-19 的旧缓存 ——
+#   页面 M6B、M9 因此停了 9 个交易日，而源头数据一直有。
+#   「单只被限流」和「整个 IP 被封」是两类信号，必须分开处理：
+#     · 同一代码最多试 CSI_SAME_TRIES 次，失败只放弃这一只，不牵连后面的；
+#     · 连续 CSI_BLOCKED_THRESHOLD 个【不同】代码都 403，才判 IP 级封禁并熔断。
+CSI_BLOCKED_THRESHOLD = 3    # 不同代码 403 累计 3 次 → 熔断（原 2，过于敏感）
+CSI_SAME_TRIES = 2           # 同一代码最多 2 次（首撞 + 退避重试 1 次）
 CSI_WAF_SLEEP = 15           # 403 后的重试退避秒数（原 50s）
 CSI_WAF_COOLDOWN_MIN = float(os.environ.get("CSI_WAF_COOLDOWN_MIN", "12"))
 CSI_WAF_FLAG = os.path.join(CACHE, "_csi_waf_cooldown.txt")
@@ -215,34 +224,45 @@ def _csi_waf_clear():
 
 
 def csindex_api(code, start, end, tries=3):
+    if code in CSI_BAD:
+        log(f"    ⏭ {code} {start}~{end} 跳过：本轮已确认 403，不再重试")
+        return pd.DataFrame(columns=["date", "close"])
     if CSI_BLOCKED[0]:
+        log(f"    ⏭ {code} {start}~{end} 跳过：本轮中证源已熔断，沿用旧缓存")
         return pd.DataFrame(columns=["date", "close"])
     if _csi_waf_active():
         CSI_BLOCKED[0] = True
         log(f"    中证官网限流冷却期内（{CSI_WAF_COOLDOWN_MIN:.0f} min），本轮跳过中证源（不消耗请求）")
+        log(f"    ⏭ {code} {start}~{end} 跳过：沿用旧缓存")
         return pd.DataFrame(columns=["date", "close"])
     s = csi_sess()
+    _n403 = 0
     for i in range(tries):
         try:
             if CSI_BLOCKED[0]:
+                log(f"    ⏭ {code} {start}~{end} 跳过：本轮中证源已熔断，沿用旧缓存")
                 return pd.DataFrame(columns=["date", "close"])
             r = s.get("https://www.csindex.com.cn/csindex-home/perf/index-perf",
                       params={"indexCode": code, "startDate": start, "endDate": end}, timeout=45)
             if r.status_code == 403:
-                # 同一代码的多次重试只计 1 次。实测（2026-09-28 10:43 与 11:09 两轮）
-                # 931591CNY01 单独 403 两次就把全局熔断打开，连带把排在它后面的
-                # 931588CNY01(m6b)/931589/930903(m9) 全部跳过、只能沿用旧缓存；
-                # 而紧挨着它前面的 931589CNY01/931586CNY01 刚刚都 200 ⇒ 并非 IP 级封禁。
-                # 真正的 IP 级封禁会在换代码后立刻再次 403，仍会按阈值熔断，防护不减弱。
                 if code != CSI_BLOCKED[2]:
                     CSI_BLOCKED[2] = code
                     CSI_BLOCKED[1] += 1
+                    _n403 = 1
+                else:
+                    _n403 += 1
+                # ① 不同代码接连 403 → 才是 IP 级封禁，熔断整轮
                 if CSI_BLOCKED[1] >= CSI_BLOCKED_THRESHOLD:
                     CSI_BLOCKED[0] = True
                     _csi_waf_trip()
-                    log(f"    中证官网限流（连续 {CSI_BLOCKED[1]} 次 403）→ 跳过中证源，冷却 {CSI_WAF_COOLDOWN_MIN:.0f} min")
+                    log(f"    中证官网限流（{CSI_BLOCKED[1]} 个不同代码 403）→ 熔断，冷却 {CSI_WAF_COOLDOWN_MIN:.0f} min")
                     return pd.DataFrame(columns=["date", "close"])
-                log(f"    {code} {start}~{end} WAF(403)，退避 {CSI_WAF_SLEEP}s 后重试 1 次")
+                # ② 同一只代码被限流 → 只放弃这一只，不牵连后面排队的代码
+                if _n403 >= CSI_SAME_TRIES:
+                    CSI_BAD.add(code)
+                    log(f"    {code} {start}~{end} 连续 {_n403} 次 403 → 放弃本只，沿用旧缓存（不熔断）")
+                    return pd.DataFrame(columns=["date", "close"])
+                log(f"    {code} {start}~{end} WAF(403)，退避 {CSI_WAF_SLEEP}s 后重试")
                 time.sleep(CSI_WAF_SLEEP)
                 csi_sess(force=True)
                 continue
