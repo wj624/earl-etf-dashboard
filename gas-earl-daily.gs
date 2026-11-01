@@ -1284,7 +1284,7 @@ function sendStale_(asof, today) {
       to: CONFIG.RECEIVER_EMAIL,
       subject: '【A股每日解读·数据卡住提醒】数据日停在 ' + asof,
       body: '已经连续 3 次定时运行，看板的数据日仍是 ' + asof + '（今天 ' + today + '）。\n' +
-            '可能是 GitHub 定时任务没跑、或数据源（中证/Wind）延迟发布。\n' +
+            '可能是 GitHub 定时任务没跑、或数据源（中证指数官网/申万/东财）延迟发布，也可能是中证官网 WAF 限流。\n' +
             '本邮件仅为提醒，期间没有重复发送解读邮件。\n\n' +
             '排查：打开 ' + CONFIG.URL_SITE + ' 看页面是否更新；或运行 testConnections()。',
       name: 'A股指标看板'
