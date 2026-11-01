@@ -1,3 +1,7 @@
+# 本机/云端共用依赖。云端 workflow 里是显式 pip install 同一组，两边保持一致。
+# akshare 供 M13（两市成交额兜底）与 M14（两融账户信息）使用；
+# fetch_data.py 里是函数内延迟导入，缺了不会整体崩溃，但这两个模块会退化成读旧缓存。
 requests
 numpy
 pandas
+akshare
