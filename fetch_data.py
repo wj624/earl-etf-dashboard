@@ -187,7 +187,12 @@ CSI_BAD = set()              # 本轮已确认 403 的代码 → 后续再遇到
 #     · 连续 CSI_BLOCKED_THRESHOLD 个【不同】代码都 403，才判 IP 级封禁并熔断。
 CSI_BLOCKED_THRESHOLD = 3    # 不同代码 403 累计 3 次 → 熔断（原 2，过于敏感）
 CSI_SAME_TRIES = 2           # 同一代码最多 2 次（首撞 + 退避重试 1 次）
-CSI_WAF_SLEEP = 15           # 403 后的重试退避秒数（原 50s）
+CSI_WAF_SLEEP = 6            # 403 后的重试退避秒数（50s → 15s → 6s，逐次收紧）
+# 【2026-11-01 二次收紧】run 41293202345 实测：H00922 与 931586CNY01 各撞一次 403，
+# 各退避 15s 重试，**两次重试仍然 403** —— 30 秒完全白等，占整轮 168s 的 18%。
+# 中证 403 只要出现，同一分钟内几乎不会自己好转，所以退避只保留「给 WAF cookie 刷新
+# 留一点时间」的作用，6s 足够；真解不开就按 CSI_SAME_TRIES 放弃本只、沿用旧缓存，
+# 下一轮靠「最落后优先」的排序自然补回来。
 CSI_WAF_COOLDOWN_MIN = float(os.environ.get("CSI_WAF_COOLDOWN_MIN", "12"))
 CSI_WAF_FLAG = os.path.join(CACHE, "_csi_waf_cooldown.txt")
 
