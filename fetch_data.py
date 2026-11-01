@@ -476,7 +476,34 @@ def get_rates():
 def fetch_all(deep=True):
     data, used = {}, {}
     log("=== 抓取行情 ===")
-    for key, (name, cands) in SERIES.items():
+
+    def _last_of(cands):
+        """该序列【首选源】缓存里的最新日期。空缓存返回 ''，排最前。
+
+        注意只认第一个有缓存的候选源：fetch_all 里 same=False 的备用源不参与合并，
+        序列实际展示的日期就是首选源的末日。若取各源最大值，m6b(H31588) 会被
+        它那条新鲜的备用源 931588(10-30) 掩盖，明明首选源 931588CNY01 停在 10-19。
+        """
+        for st, code, same in cands:
+            try:
+                df = load(f"{st}{code}")
+                if df is not None and len(df):
+                    return str(df["date"].max())
+            except Exception:
+                pass
+        return ""
+
+    # 按缓存末日升序排队：最落后的先抓。
+    # 原因（2026-11-01 实测 run 41287621696）：中证官网在一轮里抓十几只之后就开始 403，
+    # 旧顺序下排在后面的 m6b(931588CNY01) / m9(930903) 年年被跳过、只能沿用旧缓存。
+    # 让落后的先走，即使本轮后半段被限流，欠账最多的几只也已经进盘；多轮下来自然轮转补齐。
+    items = sorted(SERIES.items(), key=lambda kv: (_last_of(kv[1][1]), kv[0]))
+    lagging = [(k, _last_of(c)) for k, (n, c) in items[:3]]
+    if lagging:
+        _lagtxt = ", ".join(k + "=" + (d or "无缓存") for k, d in lagging)
+        log(f"  抓取顺序（最落后优先）：{_lagtxt} …")
+
+    for key, (name, cands) in items:
         got, src = None, None
         for st, code, same in cands:
             if st == "csi":
@@ -835,6 +862,59 @@ def _tencent_amounts(codes):
     return out
 
 
+def _tc_universe():
+    """云端没有 cache/tc_raw 时的「股票池」兜底：从 tc_recent.csv 读最近 45 个交易日
+    出现过的全部代码（该文件随仓库提交，含 5200+ 只，与历史回补池同源）。
+
+    只补股票池、不补金额 —— 金额仍走腾讯实时快照，保证与历史口径一致。
+    历史回补的 tc_raw 是几千个个股小文件，不进 git；云端 checkout 拿不到，
+    因而 _codes 恒为空、M13 增量分支永不执行（实测序列卡在 2026-10-26）。
+    """
+    p = os.path.join(CACHE, "tc_recent.csv")
+    if not os.path.exists(p):
+        return []
+    try:
+        d = pd.read_csv(p, dtype={"code": str}, usecols=["code"])
+        return sorted({str(c) for c in d["code"]
+                       if str(c).startswith(("sh", "sz", "bj"))})
+    except Exception as e:
+        log(f"  M13 股票池读取失败：{e}")
+        return []
+
+
+def _ak_amounts():
+    """全市场成交额兜底（东方财富实时快照，单位：元）。
+
+    腾讯路径要靠 cache/tc_raw/ 里的个股明细文件提供股票池，而该目录只在本机
+    tc_backfill 回补时存在、且被 .gitignore 排除（几千个小文件不进仓库）。
+    云端 checkout 拿不到它 ⇒ _codes 为空 ⇒ 增量分支整段被跳过，M13 序列永久冻结
+    （实测卡在 2026-10-26）。这里用一次快照请求直接拿全市场成交额，绕开股票池依赖。
+
+    返回 {带市场前缀的代码: 成交额(元)}，如 {'sh600000': 1.2e8}；失败返回 {}。
+    """
+    try:
+        import akshare as ak
+        df = ak.stock_zh_a_spot_em()
+        ccol = next((c for c in df.columns if str(c).strip() in ("代码", "证券代码")), None)
+        acol = next((c for c in df.columns if "成交额" in str(c)), None)
+        if ccol is None or acol is None:
+            log(f"  M13 东财快照字段异常：{list(df.columns)[:8]}")
+            return {}
+        out = {}
+        for code, amt in zip(df[ccol].astype(str), pd.to_numeric(df[acol], errors="coerce")):
+            c = code.strip().zfill(6)
+            if len(c) != 6 or not c.isdigit() or amt != amt or amt <= 0:
+                continue
+            # 6 开头沪市 / 0、3 开头深市 / 4、8、9 开头北交所
+            pre = "sh" if c[0] == "6" else ("sz" if c[0] in "03" else "bj")
+            out[pre + c] = float(amt)
+        log(f"  M13 东财全市场快照：{len(out)} 只（tc_raw 缺失时的兜底路径）")
+        return out
+    except Exception as e:
+        log(f"  M13 东财全市场快照失败：{e}")
+        return {}
+
+
 def _tencent_snap(codes):
     """腾讯实时快照的 (交易日, 快照时间HHMMSS)。休市期间返回最近交易日。"""
     try:
@@ -956,6 +1036,10 @@ def _tc_roll_maintain(snap, amt, codes):
     #      ② 逐文件再查末 256 字节兜底（防标记丢失或上一轮半途失败）。
     #    注：不要改成线程池——实测 24 线程反而 0.77x（小文件 I/O 已是瓶颈外的开销）。
     mark = os.path.join(CACHE, "tc_raw_last.txt")
+    if not os.path.isdir(RAW):
+        # 云端没有个股明细目录（不进 git）：上面 tc_recent 与周/月窗口已维护完，
+        # 这里再逐只 open 只会得到 5000 次 FileNotFoundError，直接收工。
+        return
     try:
         if os.path.exists(mark) and (open(mark, encoding="utf-8").read() or "").strip() == snap:
             return
@@ -1572,47 +1656,64 @@ def main(deep=True):
             if len(_tcdf) < 60:
                 log("  M13 交易集中度 跳过：历史序列过短")
             else:
-                # 每日增量：腾讯实时快照真实成交额。
+                # 每日增量：真实成交额。
                 # 若快照交易日 > 序列末日 → append 新行并写回 tc_concentration.csv（序列自动前进）；
-                # 否则仅覆盖末日当日（重算核对）。股票池与历史回补池(tc_raw)一致。
+                # 否则仅覆盖末日当日（重算核对）。
+                # 股票池优先取 cache/tc_raw（与本机历史回补池完全一致）；该目录不存在时
+                # （云端常态，因为它不进 git）先从 tc_recent.csv 借股票池，金额仍走腾讯；
+                # 腾讯也失败才退到东财全市场快照。三档都拿不到才放弃 —— 否则 _codes 为空，
+                # 增量分支永不执行，序列会永久冻结在仓库里那一版。
+                _t0 = time.time()
                 _codes = [os.path.splitext(f)[0] for f in os.listdir(RAW)
                           if f.endswith(".csv")] if os.path.isdir(RAW) else []
+                if not _codes:
+                    _codes = _tc_universe()
+                    if _codes:
+                        log(f"  M13 股票池取自 tc_recent.csv（{len(_codes)} 只；cache/tc_raw 不存在）")
                 _tc_last = str(_tcdf["date"].max())
+                _amt, _amsrc = {}, ""
                 if _codes:
-                    _t0 = time.time()
-                    _amt = _tencent_amounts(_codes)
-                    _t1 = time.time()
+                    _amt, _amsrc = _tencent_amounts(_codes), "腾讯实时快照"
+                if not _amt:
+                    _amt = _ak_amounts()
                     if _amt:
-                        _tot = sum(_amt.values())
-                        _arr = sorted(_amt.values(), reverse=True)
-                        _k = max(1, int(round(len(_arr) * 0.05)))
-                        _true = (sum(_arr[:_k]) / _tot * 100) if _tot > 0 else None
-                        if _true is not None:
-                            _snap, _snt = _tencent_snap(_codes)
-                            # 完整交易日判定：快照时间>=15:00（避免盘中半天数据污染日/周/月序列）
-                            _snap_ok = bool(_snt and _snt >= "150000")
-                            if _snap and _snap > _tc_last and _snap_ok:
-                                _tcdf = _tcdf.copy()
-                                _tcdf.loc[len(_tcdf)] = [_snap, round(_true, 3)]
-                                try:
-                                    _tcdf.to_csv(_tc, index=False)
-                                except Exception:
-                                    pass
-                                try:
-                                    _tc_roll_maintain(_snap, _amt, _codes)
-                                except Exception:
-                                    pass
-                            elif _snap and _snap == _tc_last and _snap_ok:
-                                # 与序列末日同日且已收盘：真实成交额核对覆盖（如周六回看周五）
-                                _tcdf = _tcdf.copy()
-                                _tcdf.loc[_tcdf["date"] == _tc_last, "ratio"] = round(_true, 3)
-                                # 同日也要重跑维护：缓冲区按日去重，可修复单位/窗口口径
-                                try:
-                                    _tc_roll_maintain(_snap, _amt, _codes)
-                                except Exception:
-                                    pass
-                        log("  M13 明细：腾讯快照 %.1fs（%d 只）+ 缓冲/明细维护 %.1fs"
-                            % (_t1 - _t0, len(_amt), time.time() - _t1))
+                        _amsrc = "东财全市场快照"
+                        _codes = list(_amt.keys())
+                _t1 = time.time()
+                if _amt:
+                    _tot = sum(_amt.values())
+                    _arr = sorted(_amt.values(), reverse=True)
+                    _k = max(1, int(round(len(_arr) * 0.05)))
+                    _true = (sum(_arr[:_k]) / _tot * 100) if _tot > 0 else None
+                    if _true is not None:
+                        _snap, _snt = _tencent_snap(_codes)
+                        # 完整交易日判定：快照时间>=15:00（避免盘中半天数据污染日/周/月序列）
+                        _snap_ok = bool(_snt and _snt >= "150000")
+                        if _snap and _snap > _tc_last and _snap_ok:
+                            _tcdf = _tcdf.copy()
+                            _tcdf.loc[len(_tcdf)] = [_snap, round(_true, 3)]
+                            try:
+                                _tcdf.to_csv(_tc, index=False)
+                            except Exception:
+                                pass
+                            try:
+                                _tc_roll_maintain(_snap, _amt, _codes)
+                            except Exception:
+                                pass
+                        elif _snap and _snap == _tc_last and _snap_ok:
+                            # 与序列末日同日且已收盘：真实成交额核对覆盖（如周六回看周五）
+                            _tcdf = _tcdf.copy()
+                            _tcdf.loc[_tcdf["date"] == _tc_last, "ratio"] = round(_true, 3)
+                            # 同日也要重跑维护：缓冲区按日去重，可修复单位/窗口口径
+                            try:
+                                _tc_roll_maintain(_snap, _amt, _codes)
+                            except Exception:
+                                pass
+                    log("  M13 明细：%s %.1fs（%d 只）+ 缓冲/明细维护 %.1fs"
+                        % (_amsrc, _t1 - _t0, len(_amt), time.time() - _t1))
+                else:
+                    log("  M13 增量跳过：拿不到全市场成交额（tc_raw 缺失且东财快照失败），"
+                        "序列停在 %s" % _tc_last)
                 _ratio_map = {d: float(x) for d, x in zip(_tcdf["date"], _tcdf["ratio"])}
 
                 # 顶部K线：中证全指(000985) 官方OHLC（csindex 缓存 + 每日增量刷新，非近似）
