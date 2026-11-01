@@ -124,6 +124,13 @@ function setGeminiKey(k) {
     log_('当前已设置的密钥：' + keyFp_(geminiKey_()));
     return;
   }
+  var bad = keyReject_(k, 'Gemini 密钥');
+  if (bad) {
+    log_('❌ 没有保存：' + bad);
+    log_('   你传进来的是：' + JSON.stringify(String(k).slice(0, 40)));
+    log_('   请换成 Google AI Studio 里的真实密钥（形如 AIza...，39 位）。');
+    return;
+  }
   var v = String(k).trim();
   PropertiesService.getScriptProperties().setProperty(PROP_GEMINI, v);
   log_('✅ 已保存 Gemini 密钥：' + keyFp_(v));
@@ -144,6 +151,13 @@ function setFredKey(k) {
     log_('当前已设置的 FRED 密钥：' + keyFp_(fredKey_()));
     return;
   }
+  var bad = keyReject_(k, 'FRED 密钥');
+  if (bad) {
+    log_('❌ 没有保存：' + bad);
+    log_('   你传进来的是：' + JSON.stringify(String(k).slice(0, 40)));
+    log_('   请换成 FRED 账户页里的真实密钥（32 位小写字母+数字）。');
+    return;
+  }
   var v = String(k).trim();
   PropertiesService.getScriptProperties().setProperty(PROP_FRED, v);
   log_('✅ 已保存 FRED 密钥：' + keyFp_(v));
@@ -158,6 +172,38 @@ function clearKeys() {
     p.deleteProperty(PROP_FRED);
   } catch (e) {}
   log_('已清除脚本属性里的 Gemini 与 FRED 密钥。');
+}
+
+/**
+ * 诊断：一次看清「脚本属性能不能写、两个密钥在不在」。
+ * 只打印头尾指纹，不泄露全文。设置完密钥跑一次这个最省事。
+ */
+function keyDiag() {
+  var p = PropertiesService.getScriptProperties();
+  p.setProperty('__probe__', 'ok-' + new Date().getTime());
+  log_('探针写入后读回：' + p.getProperty('__probe__'));
+  p.deleteProperty('__probe__');
+  var keys = p.getKeys() || [];
+  log_('属性键（共 ' + keys.length + ' 个）：' + JSON.stringify(keys));
+  log_('GEMINI_API_KEY：' + (p.getProperty(PROP_GEMINI) ? keyFp_(p.getProperty(PROP_GEMINI)) : '❌ 空'));
+  log_('FRED_API_KEY  ：' + (p.getProperty(PROP_FRED) ? keyFp_(p.getProperty(PROP_FRED)) : '❌ 空'));
+  log_('提示：脚本属性是「项目级」的。换一个新 Apps Script 项目，属性全部为空；');
+  log_('      定时器也挂在具体项目上 —— 请在「左侧时钟图标 / 触发器」里确认哪个项目在跑 dailyMain，');
+  log_('      然后在**那个**项目里设密钥，否则设了也不生效。');
+}
+
+/**
+ * 密钥体检：把「占位符 / 中文 / 太短」这类明显不是密钥的东西挡在写库之前。
+ * 返回空串表示通过，否则返回拒绝原因。
+ * 来由：曾有人把占位符 '替代防泄密' 当密钥存进脚本属性，接口报 400 却看不出原因。
+ */
+function keyReject_(k, label) {
+  var v = String(k === undefined || k === null ? '' : k).trim();
+  if (!v) return '空值';
+  if (v === 'thisKeyIsNotSet' || v === '你的密钥' || v === '替代防泄密') return '这是文档里的占位符，不是密钥';
+  if (/[^\x20-\x7E]/.test(v)) return '含中文或其他非 ASCII 字符，密钥只可能是英文字母和数字';
+  if (v.length < 20) return '只有 ' + v.length + ' 位，' + label + ' 一般在 32~39 位';
+  return '';
 }
 
 // 中文名 → 代码，用于邮件主题与分组顺序
@@ -1367,6 +1413,22 @@ function previewNow() {
   } finally {
     FORCE_ = false;
   }
+}
+
+/**
+ * ②-b 一次性设置两个密钥（最不容易出错的方式）
+ *
+ * 用法：把下面两行的引号里换成真实密钥 → 保存 → 在函数下拉里选「setupKeys」→ 运行。
+ *      看到两条 ✅ 就成功了，然后把密钥删掉（留空字符串即可），再保存。
+ *
+ * ⚠️ 千万不要在编辑器里直接选中 setGeminiKey / setFredKey 运行 ——
+ *    它们是带参数的函数，直接运行等于传了 undefined，只会打印用法、什么都不会保存。
+ *    这就是「跑了但没生效」最常见的原因。
+ */
+function setupKeys() {
+  setGeminiKey('');   // ← 填 Google AI Studio 的密钥（AIza 开头，39 位）
+  setFredKey('');     // ← 填 FRED 的密钥（32 位小写字母+数字）
+  log_('—— 设置完跑一次 keyDiag() 核对 ——');
 }
 
 /** ③ 装定时器：每天 19:15（北京）自动跑 */
