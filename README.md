@@ -2,7 +2,8 @@
 
 > **在线看板（点开即用）**：<https://wj624.github.io/earl-etf-dashboard/>  
 > **五年之锚 v2（独立页）**：<https://wj624.github.io/earl-etf-dashboard/anchor_v2.html>  
-> **源码仓库**：<https://github.com/wj624/earl-etf-dashboard>
+> **源码仓库**：<https://github.com/wj624/earl-etf-dashboard>  
+> **原版看板（上游 wwww1998）**：<https://wwww1998.github.io/earl-etf-dashboard/>
 
 复现张翼轸《EarlETF 图表周刊》里的图表模型，做成一个**自包含单文件看板**，数据每天 18:30 自动更新。
 
@@ -23,6 +24,7 @@
 | 精简机器数据（7.6KB） | <https://wj624.github.io/earl-etf-dashboard/latest.json> |
 | 全量机器数据（2.2MB） | <https://wj624.github.io/earl-etf-dashboard/data.json> |
 | 源码仓库 | <https://github.com/wj624/earl-etf-dashboard> |
+| **原版看板（上游 wwww1998）** | <https://wwww1998.github.io/earl-etf-dashboard/> |
 
 一次性复制全部地址：
 
@@ -34,6 +36,7 @@
 精简数据        https://wj624.github.io/earl-etf-dashboard/latest.json
 全量数据        https://wj624.github.io/earl-etf-dashboard/data.json
 源码仓库        https://github.com/wj624/earl-etf-dashboard
+原版看板        https://wwww1998.github.io/earl-etf-dashboard/
 ```
 
 ### 为什么需要「给 AI 的摘要」这几个文件
@@ -67,7 +70,7 @@
 
 ## 和上游原版（wwww1998）比，改了些什么
 
-本仓库复制自 [wwww1998/earl-etf-dashboard](https://github.com/wwww1998/earl-etf-dashboard)。
+本仓库复制自 [wwww1998/earl-etf-dashboard](https://github.com/wwww1998/earl-etf-dashboard)（原版在线看板：<https://wwww1998.github.io/earl-etf-dashboard/>）。
 **20 个指标的算法、图表口径完全没动**，改的全部是「怎么让它跑得下去」。
 
 一句话概括上游的做法：**关掉云端，改在本机跑**。原作者 2026-09-18 把 `schedule` 注释掉，改用 Windows 计划任务每天 18:30 在自己电脑上执行、跑完再 `git push`。在他自己机器上没问题（家里宽带 IP 不会被中证官网当爬虫封、本地有完整的原始缓存），但换台机器就复现不了。
