@@ -403,16 +403,29 @@ function fetchFred_() {
       var url = 'https://api.stlouisfed.org/fred/series/observations' +
                 '?series_id=' + id + '&api_key=' + key +
                 '&file_type=json&sort_order=desc&limit=15';
-      var r = UrlFetchApp.fetch(url, { muteHttpExceptions: true });
-      if (r.getResponseCode() !== 200) {
-        var code = r.getResponseCode();
+      // FRED 的 5xx 基本是上游抖动（实测同一秒两个序列一起 500，重试即恢复），
+      // 所以 5xx 退避重试 3 次；4xx 是密钥/参数问题，重试没意义，直接报。
+      var r = null, code = 0, body = '';
+      for (var attempt = 1; attempt <= 3; attempt++) {
+        r = UrlFetchApp.fetch(url, { muteHttpExceptions: true });
+        code = r.getResponseCode();
+        if (code === 200) break;
+        body = String(r.getContentText() || '');
+        if (code < 500) break;
+        if (attempt < 3) {
+          log_('FRED ' + id + ' 第 ' + attempt + ' 次 HTTP ' + code + '，稍后重试…');
+          Utilities.sleep(attempt === 1 ? 1500 : 3500);
+        }
+      }
+      if (code !== 200) {
         var why = code === 400 ? '密钥无效或格式不对'
                 : code === 403 ? '密钥被停用 / 请求被拒'
                 : code === 429 ? '请求过于频繁'
+                : code >= 500 ? 'FRED 服务端临时故障（已重试 3 次）'
                 : '接口异常';
         LAST_FRED_ = id + ' 返回 HTTP ' + code + '（' + why + '）';
         log_('FRED ' + id + ' HTTP ' + code + ' —— ' + why);
-        log_('   原文：' + String(r.getContentText() || '').slice(0, 160));
+        log_('   原文：' + body.slice(0, 160));
         return;
       }
       var obs = JSON.parse(r.getContentText('UTF-8')).observations || [];
