@@ -579,6 +579,8 @@ python backfill.py 2              # 中证官网补洞守护进程，最多跑 2
 | `snapshot.md` | **构建产物**：同上内容的 Markdown 版 |
 | `latest.json` | **构建产物**：同上内容的结构化版本（约 7.6KB） |
 | `.github/workflows/update.yml` | 每日自动更新工作流 |
+| `gas-earl-daily.gs` | **Google Apps Script 邮件脚本**：每天 19:15（北京）读取上面三个摘要文件，拼成一封「人话解读」邮件发出（含 AI 总结，AI 不可用时自动降级为规则版） |
+| `复制邮件脚本.html` | 打开即可一键复制上面这个脚本的页面（每次拉最新版） |
 
 ---
 
@@ -599,3 +601,69 @@ python backfill.py 2              # 中证官网补洞守护进程，最多跑 2
 本项目仅复现公开的图表分析模型，用于数据观察与学习，**不构成任何投资建议**。
 所有指标的历史分位基于有限样本，口径替代部分（见第七部分）存在系统性偏差，请自行判断。
 原始模型版权归《EarlETF 图表周刊》作者张翼轸所有。
+
+---
+
+# 第十二部分 · 每天早上收一封邮件（可选）
+
+`gas-earl-daily.gs` 是配套的邮件脚本，跑在 **Google Apps Script** 上，免费、不用服务器。
+它每天定时读取本仓库的 `latest.json` / `llms.txt`，拼成一封带「温度计 + 四张机会卡 + 宏观对照 + 20 个指标明细 + 两条经验规则」的 HTML 邮件发到你邮箱。
+
+### 分工
+
+| 角色 | 在哪跑 | 干什么 |
+|---|---|---|
+| 数据看板（本仓库） | GitHub Pages + Actions | 每天 18:30 抓数、算指标、生成 `latest.json` / `llms.txt` |
+| 邮件脚本（`gas-earl-daily.gs`） | Google Apps Script | 每天 19:15 读取上面两个文件，发邮件 |
+
+### 部署步骤
+
+> 想省事就直接开 **<https://wj624.github.io/earl-etf-dashboard/复制邮件脚本.html>** —— 页面里点「复制全文」，然后跳到第 3 步。
+
+1. 打开 <https://script.google.com/home> → 左上「新项目」。
+2. 项目名改成「A股每日解读」。
+3. 把 `gas-earl-daily.gs` 全文粘进编辑器，**覆盖掉默认的空 `myFunction`**，`Ctrl+S` 保存。
+4. **设置密钥**（只需一次）。本脚本有两类密钥，都**不写在代码里**，而是存进「脚本属性」：
+   - **Gemini 密钥**（AI 总结用）：去 <https://aistudio.google.com/apikey> 申请，然后临时在代码末尾加一行并运行：
+     ```js
+     function setupGemini() { setGeminiKey('粘贴密钥'); }
+     ```
+   - **FRED 密钥**（美债数据用）：去 <https://fredaccount.stlouisfed.org/apikeys> 申请，临时加一行并运行：
+     ```js
+     function setupFred() { setFredKey('粘贴密钥'); }
+     ```
+   看到「✅ 已保存密钥：AIzaSy…xxxx」后，**把这行删掉**再保存。
+5. 运行 `testConnections()` → 选它点「运行」→ 授权（高级 → 前往项目（不安全）→ 允许）。看日志确认三个接口都通。
+6. 运行 `previewNow()` → 运行，去邮箱看效果。
+7. 运行 `installDailyTrigger()` → 运行，装上每天 19:15 的定时器。
+8. 点左侧闹钟图标「触发器」，确认有一条 `dailyMain` / 时间驱动 / 每天 / 下午 7 点~8 点。
+
+### ⚠️ 密钥为什么不能写在代码里
+
+这个仓库是**公开**的，`gas-earl-daily.gs` 也在其中。Google 和 FRED 都有自动化扫描器，
+一旦把密钥写进代码并被公开抓取，密钥会被**直接作废**（Gemini 报 `403 Your API key was reported as leaked`；
+FRED 同样会被封）。所以密钥一律走 `setGeminiKey` / `setFredKey` 存进「项目设置 → 脚本属性」，代码里永远是空的。
+代码本身不需要任何修改就能跑（只是没有 AI / 美债时会自动降级）。
+
+### 密钥出问题怎么排查
+
+- **Gemini 报 403 `reported as leaked`**：密钥被 Google 判定泄露并永久作废。**改配置没用**，必须去 AI Studio 新建一把，再 `setGeminiKey('新密钥')`。这正是把密钥移出代码的原因——之前写在代码里被公开仓库扫到就会作废。
+- 跑 `listGeminiModels()`：它会直接问 Google 你这把密钥能用哪些模型，列不出来时分两种情况给出对应修法（密钥作废 / 没开 Generative Language API）。
+- 模型改名或下线：脚本会自动发现你账号下能用的对话模型并优先使用，一般不用手改 `GEMINI_MODELS`。
+
+### 会主动不发的情况
+
+- **数据日没推进**：当看板数据日（邮件按 `latest` 字段判定）与上次成功发送相同，默认跳过（`SKIP_IF_UNCHANGED=true`），避免重复发同一天数据；连续 3 次没推进会改发一封「数据卡住」提醒。
+- **周末 / 节假日**：默认 `WEEKDAYS_ONLY=false`（每天跑），但因为上面这条去重，数据不更新的日子不会发重复邮件。若要严格只工作日发，把 `CONFIG.WEEKDAYS_ONLY` 改成 `true`。
+
+### 常用开关（都在脚本顶部的 `CONFIG` 里）
+
+| 开关 | 默认 | 作用 |
+|---|---|---|
+| `RECEIVER_EMAIL` | `332515070@qq.com` | 收件人，多个用英文逗号分隔 |
+| `WITH_GEMINI` | `true` | 改 `false` 就不调 AI，只用规则版总结（省配额） |
+| `WITH_FRED` | `true` | 改 `false` 就不取美债（少一个外部依赖） |
+| `DRY_RUN` | `false` | 改 `true` 只打印邮件 HTML，不发信 |
+| `TRIGGER_HOUR` / `TRIGGER_MINUTE` | `19` / `15` | 发信时间（北京） |
+| `WEEKDAYS_ONLY` | `false` | `true` = 只工作日发 |
+| `SKIP_IF_UNCHANGED` | `true` | `true` = 数据日没变就跳过 |
