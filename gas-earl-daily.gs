@@ -256,7 +256,10 @@ function dailyMain() {
   // ---- 3.7 美债 ----
   if (CONFIG.WITH_FRED) {
     bundle.fred = fetchFred_();
-    if (!bundle.fred) bundle.warn.push('FRED 美债数据没取到，本次跳过「宏观对照」小节。');
+    if (!bundle.fred) {
+      bundle.warn.push('FRED 美债数据没取到（' + (LAST_FRED_ || '原因未知') +
+                       '），本次跳过「宏观对照」小节。');
+    }
   }
 
   // ---- 3.8 AI 总结（一定会有：AI 不可用时降级为规则生成）----
@@ -335,9 +338,15 @@ function fetchText_() {
   }
 }
 
+// 最近一次 FRED 取数失败的原因，供邮件顶部提示直接说清楚
+// （「没配密钥」和「接口报错」是两回事，混在一句话里没法排查）
+var LAST_FRED_ = '';
+
 function fetchFred_() {
+  LAST_FRED_ = '';
   var key = fredKey_();
   if (!key) {
+    LAST_FRED_ = '脚本属性里没有密钥，跑一次 setFredKey(\'你的FRED密钥\')';
     log_('未设置 FRED 密钥（运行 setFredKey(\'你的密钥\')），跳过「宏观对照」小节。');
     return null;
   }
@@ -349,7 +358,17 @@ function fetchFred_() {
                 '?series_id=' + id + '&api_key=' + key +
                 '&file_type=json&sort_order=desc&limit=15';
       var r = UrlFetchApp.fetch(url, { muteHttpExceptions: true });
-      if (r.getResponseCode() !== 200) { log_('FRED ' + id + ' HTTP ' + r.getResponseCode()); return; }
+      if (r.getResponseCode() !== 200) {
+        var code = r.getResponseCode();
+        var why = code === 400 ? '密钥无效或格式不对'
+                : code === 403 ? '密钥被停用 / 请求被拒'
+                : code === 429 ? '请求过于频繁'
+                : '接口异常';
+        LAST_FRED_ = id + ' 返回 HTTP ' + code + '（' + why + '）';
+        log_('FRED ' + id + ' HTTP ' + code + ' —— ' + why);
+        log_('   原文：' + String(r.getContentText() || '').slice(0, 160));
+        return;
+      }
       var obs = JSON.parse(r.getContentText('UTF-8')).observations || [];
       for (var i = 0; i < obs.length; i++) {
         if (obs[i].value && obs[i].value !== '.') {
@@ -357,7 +376,10 @@ function fetchFred_() {
           break;
         }
       }
-    } catch (e) { log_('FRED ' + id + ' 异常：' + e); }
+    } catch (e) {
+      LAST_FRED_ = id + ' 请求异常：' + e;
+      log_('FRED ' + id + ' 异常：' + e);
+    }
   });
   return Object.keys(out).length ? out : null;
 }
@@ -1310,7 +1332,7 @@ function testConnections() {
     log_('   ⚠️ 还没设置 FRED 密钥（运行 setFredKey(\'你的密钥\')）。「宏观对照」小节会跳过。');
   } else {
     var f = fetchFred_();
-    log_('   ' + (f ? '✅ ' + JSON.stringify(f) : '❌ 失败'));
+    log_('   ' + (f ? '✅ ' + JSON.stringify(f) : '❌ 失败：' + (LAST_FRED_ || '原因未知')));
   }
 
   log_('—— 3/3 Gemini ——');
