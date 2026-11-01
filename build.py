@@ -60,23 +60,24 @@ def rebuild_anchor():
     hi = max(range(n), key=lambda i: devs[i])
     lo = min(range(n), key=lambda i: devs[i])
     last_over = next((ds[i] for i in range(n - 1, -1, -1) if devs[i] >= 10), "")
-    last_bot = next((ds[i] for i in range(n - 1, -1, -1) if devs[i] <= -25), "")
+    last_bot = next((ds[i] for i in range(n - 1, -1, -1) if devs[i] <= -20), "")
     d_over = sum(1 for x in devs if x >= 10)
-    d_bot = sum(1 for x in devs if x <= -25)
+    d_bot = sum(1 for x in devs if x <= -20)
     d_neu = n - d_over - d_bot
     hist_pct = round(sum(1 for x in devs if x <= cur_dev) / n * 100, 1)
 
-    # 三档阈值与 index.html 的 M1 同源：中证全指 000985 口径（+10% / −25%），
-    # 不要换成万得全A 口径的 +15% / −20%，两者的偏离度水平值差约 5pt。
+    # 三档阈值与 index.html 的 M1 同源：中证全指 000985 口径（+10% / −20%）。
+    # −20% 正好等于 M1b 的「五年均线打八折」(MA×0.8)，两页对得上；
+    # 不要换成万得全A 口径的 +15%，两者偏离度水平值差约 5pt。
     if cur_dev >= 10:
         zone, label, color = "over", "高估区间 · 暂停/减仓", "red"
         advice = "偏离率 ≥ +10%：估值偏高，暂停定投、考虑分批减仓"
-    elif cur_dev <= -25:
+    elif cur_dev <= -20:
         zone, label, color = "bot", "底部区间 · 分批抄底", "green"
-        advice = "偏离率 ≤ −25%：估值低位，可分批加仓"
+        advice = "偏离率 ≤ −20%：估值低位，可分批加仓"
     else:
         zone, label, color = "neutral", "中性区间 · 正常定投持有", "blue"
-        advice = "−25% < 偏离率 < +10%：估值合理，按计划定投即可"
+        advice = "−20% < 偏离率 < +10%：估值合理，按计划定投即可"
 
     anchor = {
         "dates": ds, "price": prs, "ma": mas, "dev": devs,
@@ -101,11 +102,10 @@ def rebuild_anchor():
     except Exception as e:
         print("anchor_v2: ANCHOR JSON 解析失败，跳过：", e); return
     txt = txt[:jstart] + new_json + txt[jstart + jend:]
-    # 文案：数据源/指标名换成中证全指
-    txt = txt.replace("万得全A <code>881001.WI</code>（Wind 官方 API，真实历史）",
-                      "中证全指 <code>000985</code>（中证官网/Tencent，云端每日刷新）")
-    txt = txt.replace("881001.WI", "000985")
-    txt = txt.replace("Wind全A", "中证全指000985").replace("万得全A", "中证全指000985")
+    # 说明：这里原来还有三行「881001.WI → 000985 / 万得全A → 中证全指000985」的全量字符串替换，
+    # 那是换源时的一次性迁移代码。文件迁完之后必须删掉，否则每次构建都会把正文里正常出现的
+    # 「万得全A」改写成「中证全指000985」——比如「不要与万得全A 口径混用」会被改成
+    # 「不要与中证全指000985 混用」，意思正好反了。别再把它加回来。
     with open(ap, "w", encoding="utf-8") as fh:
         fh.write(txt)
     print(f"已重建 anchor_v2.html  ANCHOR（{n} 点，截至 {ds[-1]}，偏离率 {cur_dev:.2f}%）")
