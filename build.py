@@ -59,22 +59,24 @@ def rebuild_anchor():
     cur_dev = devs[-1]
     hi = max(range(n), key=lambda i: devs[i])
     lo = min(range(n), key=lambda i: devs[i])
-    last_over = next((ds[i] for i in range(n - 1, -1, -1) if devs[i] >= 15), "")
-    last_bot = next((ds[i] for i in range(n - 1, -1, -1) if devs[i] <= -20), "")
-    d_over = sum(1 for x in devs if x >= 15)
-    d_bot = sum(1 for x in devs if x <= -20)
+    last_over = next((ds[i] for i in range(n - 1, -1, -1) if devs[i] >= 10), "")
+    last_bot = next((ds[i] for i in range(n - 1, -1, -1) if devs[i] <= -25), "")
+    d_over = sum(1 for x in devs if x >= 10)
+    d_bot = sum(1 for x in devs if x <= -25)
     d_neu = n - d_over - d_bot
     hist_pct = round(sum(1 for x in devs if x <= cur_dev) / n * 100, 1)
 
-    if cur_dev >= 15:
+    # 三档阈值与 index.html 的 M1 同源：中证全指 000985 口径（+10% / −25%），
+    # 不要换成万得全A 口径的 +15% / −20%，两者的偏离度水平值差约 5pt。
+    if cur_dev >= 10:
         zone, label, color = "over", "高估区间 · 暂停/减仓", "red"
-        advice = "偏离率 ≥ +15%：估值偏高，暂停定投、考虑分批减仓"
-    elif cur_dev <= -20:
+        advice = "偏离率 ≥ +10%：估值偏高，暂停定投、考虑分批减仓"
+    elif cur_dev <= -25:
         zone, label, color = "bot", "底部区间 · 分批抄底", "green"
-        advice = "偏离率 ≤ −20%：估值低位，可分批加仓"
+        advice = "偏离率 ≤ −25%：估值低位，可分批加仓"
     else:
         zone, label, color = "neutral", "中性区间 · 正常定投持有", "blue"
-        advice = "−20% < 偏离率 < +15%：估值合理，按计划定投即可"
+        advice = "−25% < 偏离率 < +10%：估值合理，按计划定投即可"
 
     anchor = {
         "dates": ds, "price": prs, "ma": mas, "dev": devs,
