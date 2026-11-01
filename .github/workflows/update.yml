@@ -93,7 +93,7 @@ jobs:
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-          git add index.html data.json data.js version.txt cache/
+          git add index.html anchor_v2.html data.json data.js version.txt cache/
           # AI 可读摘要（llms.txt 是 2024 年提出的约定文件名，部分工具会自动探测）
           git add llms.txt snapshot.md latest.json
           if git diff --staged --quiet; then
