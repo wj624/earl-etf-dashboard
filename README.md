@@ -572,7 +572,7 @@ python backfill.py 2              # 中证官网补洞守护进程，最多跑 2
 | 文件 | 作用 |
 |---|---|
 | `index.html` | **构建产物**：自包含单文件看板（ECharts + 数据已内联，双击即可打开） |
-| `anchor_v2.html` | 独立页：五年之锚 v2（中证全指 000985 偏离率交易区间，三档 `≤−25% / −25%~+10% / ≥+10%`），也是自包含单文件；由 `build.py` 的 `rebuild_anchor()` 每次构建时用 `data.json` 重建 |
+| `anchor_v2.html` | 独立页：五年之锚 v2（中证全指 000985 偏离率交易区间，三档 `≤−20% / −20%~+10% / ≥+10%`；其中 −20% 与 M1b 的 MA×0.8 重合、+10% 与 M1 的高估线一致），也是自包含单文件；由 `build.py` 的 `rebuild_anchor()` 每次构建时用 `data.json` 重建 |
 | `template.html` | 页面源码。**要改页面改这里**，改完必须跑 `build.py` |
 | `build.py` | 把 `template.html` + `echarts.min.js` + `data.js` 打包成 `index.html`，并写 `version.txt` |
 | `fetch_data.py` | 数据抓取 + 20 个指标计算，输出 `data.json` / `data.js` |
