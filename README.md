@@ -1,6 +1,7 @@
 # EarlETF 图表周刊 · 指标看板
 
-> **在线看板（点开即用）**：<https://wj624.github.io/earl-etf-dashboard/>  
+> **在线看板（点开即用）**：<https://wj624.github.io/earl-etf-dashboard/>
+> 另一个版本https://wwww1998.github.io/earl-etf-dashboard/
 > **五年之锚 v2（独立页）**：<https://wj624.github.io/earl-etf-dashboard/anchor_v2.html>  
 > **源码仓库**：<https://github.com/wj624/earl-etf-dashboard>
 
