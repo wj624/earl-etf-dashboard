@@ -16,10 +16,16 @@ _publish_anchor/
 _syn*.js
 *.csv
 !.gitignore
-# 缓存文件进 git，作为 actions/cache 的永久备份
+# 缓存文件进 git（云端已无 actions/cache，checkout 是唯一来源）
 !cache/csi*.csv
 !cache/cni*.csv
 !cache/tx*.csv
 !cache/zzqz985.csv
 !cache/sw*.csv
 !cache/fund*.csv
+
+# 中证限流冷却标记：12 分钟就过期。若被提交进仓库，下一轮可能在冷却期内直接跳过
+# 整个中证源（2026-11-01 之前它一直是 tracked 的），故明确忽略。
+cache/_csi_waf_cooldown.txt
+# 个股成交额原始明细：几千个小文件，只在本机 tc_backfill 回补时存在，不进仓库
+cache/tc_raw/
