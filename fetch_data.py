@@ -1225,20 +1225,11 @@ def main(deep=True):
     if ek and "H11023" in S:
         ix0 = S[ek].index.intersection(S["H11023"].index)   # 合成回补所需的基金交易日轴
         eq = S[ek]                                          # 沪深300 线：官方全收益指数 H00300
-        # 偏债基线：优先真实 Wind 885003
+        # 偏债基线：改用云端可刷的「申万 807330 + 25/75 合成回补」。
+        # 原 Wind 885003.WI 是本地低频缓存、云端无法刷新会永久冻结；807330 为申万官方
+        # 公开指数（云端 API 每日刷新），是 885003 的公开等价物。
         syn_lvl, bench_src = None, None
-        wind885_p = os.path.join(CACHE, "wind885003.csv")
-        if os.path.exists(wind885_p):
-            try:
-                wd = pd.read_csv(wind885_p, parse_dates=["date"])
-                ws = pd.Series(pd.to_numeric(wd["close"], errors="coerce").values,
-                               index=pd.to_datetime(wd["date"])).dropna().sort_index()
-                if len(ws) > 250:
-                    syn_lvl = ws
-                    bench_src = "万得偏债混合型基金指数(885003.WI, Wind真实)"
-            except Exception as e:
-                log(f"  M3 读取 Wind 885003 失败: {e}")
-        # 回退：申万 807330（真实,2009起）+ 25/75 合成回补（2005~2009）
+        # 申万 807330（真实,2009起）+ 25/75 合成回补（2005~2009）
         if syn_lvl is None:
             a = eq.reindex(ix0).ffill(); b = S["H11023"].reindex(ix0).ffill()
             baseX = pd.Timestamp("2004-12-31")
@@ -1280,12 +1271,12 @@ def main(deep=True):
         # 原著「沪深300指数基金的累计涨幅」对比「偏债混合基金指数」，
         # 用易方达沪深300(110020)累计净值 + 万得偏债混合基金指数(885003.WI)重建，贴近 2022 年 4 月截图画面。
         _fe = fetch_fund_nav("110020")   # 易方达沪深300指数：沪深300指数基金代表
-        _wd = load("wind885003")         # 万得偏债混合基金指数(885003.WI)
-        if _fe is not None and _wd is not None and len(_fe) and len(_wd):
+        # 偏债腿改用云端可刷的申万 807330（885003 公开等价物），不再读本地 Wind 缓存
+        if _fe is not None and swnav is not None and len(_fe) and len(swnav):
             _s300 = pd.Series(pd.to_numeric(_fe["nav"], errors="coerce").values,
                               index=pd.to_datetime(_fe["date"], format="%Y%m%d")).dropna().sort_index()
-            _svdb = pd.Series(pd.to_numeric(_wd["close"], errors="coerce").values,
-                              index=pd.to_datetime(_wd["date"], format="%Y-%m-%d")).dropna().sort_index()
+            _svdb = pd.Series(pd.to_numeric(swnav["nav"], errors="coerce").values,
+                              index=pd.to_datetime(swnav["date"], format="%Y%m%d")).dropna().sort_index()
             _jn = _s300.index.intersection(_svdb.index)
             if len(_jn) > 20:
                 _a = _s300.reindex(_jn) / _s300.reindex(_jn).iloc[0] * 100.0
@@ -1293,7 +1284,7 @@ def main(deep=True):
                 M["m3b"] = {"data": pack(_jn, _a, _b),
                             "cur": {"eq": lv(_a)[0], "dm": lv(_b)[0],
                                     "date": _jn[-1].strftime("%Y-%m-%d")}}
-                SRC["m3b_funds"] = "易方达沪深300(110020) vs 偏债混合基金指数(885003)"
+                SRC["m3b_funds"] = "易方达沪深300(110020) vs 申万混合偏债指数(807330)"
                 log(f"  M3b 韭圈儿·基金净值版 OK（{len(_jn)} 日 {_jn[0]:%Y-%m-%d}~{_jn[-1]:%Y-%m-%d}）")
 
     # ---------- M4 偏股基金 3 年滚动年化 ----------
@@ -1347,20 +1338,13 @@ def main(deep=True):
                         "rmind": ratio.idxmin().strftime("%Y-%m-%d"),
                         "date": sub[-1].strftime("%Y-%m-%d")}}
 
-    _w_bd_p = os.path.join(CACHE, "wind885006.csv")
-    _m5 = _m5_gauge(S["930950"], pd.read_csv(_w_bd_p, parse_dates=["date"]).set_index("date")["close"].sort_index()) \
-        if "930950" in S and os.path.exists(_w_bd_p) else None
+    # 债基线改用云端可刷的中证债券基金指数(H11023，一级债基代用)；
+    # 原 Wind 885006.WI 为本地低频缓存、云端无法刷新会永久冻结。
+    _m5 = _m5_gauge(S["930950"], S["H11023"]) if "930950" in S and "H11023" in S else None
     if _m5:
         M["m5"] = _m5
-        SRC["m5"] = "中证偏股基金指数(930950) vs 万得一级债基指数(885006.WI)，2007-12-31=1000"
-        log(f"  M5 顶部共振 OK（原文口径：930950偏股基金 vs 885006一级债基，2007末锚定）")
-    # 降级：Wind 一级债基缓存缺失 → 中证债券基金指数(H11023，同为一级债基代用)，锚点同上
-    elif "930950" in S and "H11023" in S:
-        _m5 = _m5_gauge(S["930950"], S["H11023"])
-        if _m5:
-            M["m5"] = _m5
-            SRC["m5"] = "中证偏股基金指数(930950) vs 中证债券基金指数(H11023)，2007-12-31=1000（降级）"
-            log("  M5 顶部共振 OK（原文口径，Wind 一级债基缺失 → H11023 降级）")
+        SRC["m5"] = "中证偏股基金指数(930950) vs 中证债券基金指数(H11023)，2007-12-31=1000（云端每日刷新）"
+        log("  M5 顶部共振 OK（930950偏股基金 vs H11023债基，2007末锚定，云端源）")
 
     # ---------- M5b 偏股基金 vs 易方达增强回报（@qzy69 原始一级债基口径） ----------
     # 与 M5 同一思路，但债基线用 @qzy69 原始使用的「易方达增强回报(110017)」累计净值，
@@ -1652,15 +1636,39 @@ def main(deep=True):
     # 2015-04-29~2015-08-03 官方确实未披露（68 个交易日），flag=估算 的那段是建模重建
     #   （担保物价值 ÷ 负债 × 插值 k 系数），前端据此画橙色虚线 —— 必须与真实观测区分。
     try:
-        _p14 = os.path.join(CACHE, "danbao.csv")
-        if os.path.exists(_p14):
-            _d14 = pd.read_csv(_p14)
-            _d14["_dt"] = pd.to_datetime(_d14["date"].astype(str).str.replace("-", "", regex=False),
-                                         format="%Y%m%d", errors="coerce")
-            _d14 = (_d14.dropna(subset=["_dt"]).drop_duplicates(subset=["_dt"], keep="last")
-                    .sort_values("_dt"))
-            _s14 = _d14.set_index("_dt")["value"].astype(float)
-            _est14 = (_d14.set_index("_dt")["flag"].fillna("官方").astype(str) == "估算").astype(int)
+        _s14, _est14 = None, None
+        # 1) 云端优先：东方财富「两融账户信息」——含官方「平均维持担保比例」日频，单次返回全历史。
+        #    （原 danbao.csv 由 _danbao_fetch.py 本地尾刷、云端无法刷新，会永久冻结在某一日。）
+        try:
+            import akshare as ak
+            _m14df = ak.stock_margin_account_info()
+            _cd = next((c for c in _m14df.columns if "日期" in str(c)), None)
+            _cv = next((c for c in _m14df.columns if "维持担保比例" in str(c)), None)
+            if _cd is not None and _cv is not None:
+                _t = _m14df[[_cd, _cv]].copy()
+                _t.columns = ["date", "value"]
+                _t["_dt"] = pd.to_datetime(_t["date"].astype(str), errors="coerce").dt.normalize()
+                _t["value"] = pd.to_numeric(_t["value"], errors="coerce")
+                _t = (_t.dropna(subset=["_dt", "value"]).drop_duplicates("_dt", keep="last")
+                      .sort_values("_dt"))
+                if len(_t) > 250:
+                    _s14 = _t.set_index("_dt")["value"].astype(float)
+                    _est14 = pd.Series(0, index=_s14.index, dtype=int)   # 云端全为官方值
+                    log(f"  M14 云端两融账户统计 OK（{len(_s14)} 行，最新 {_s14.index[-1]:%Y-%m-%d}）")
+        except Exception as e:
+            log(f"  M14 云端两融取数失败，回退本地缓存: {e}")
+        # 2) 回退：本地 danbao.csv（保留 2015 官方缺口的估算重建）
+        if _s14 is None:
+            _p14 = os.path.join(CACHE, "danbao.csv")
+            if os.path.exists(_p14):
+                _d14 = pd.read_csv(_p14)
+                _d14["_dt"] = pd.to_datetime(_d14["date"].astype(str).str.replace("-", "", regex=False),
+                                             format="%Y%m%d", errors="coerce")
+                _d14 = (_d14.dropna(subset=["_dt"]).drop_duplicates(subset=["_dt"], keep="last")
+                        .sort_values("_dt"))
+                _s14 = _d14.set_index("_dt")["value"].astype(float)
+                _est14 = (_d14.set_index("_dt")["flag"].fillna("官方").astype(str) == "估算").astype(int)
+        if _s14 is not None and len(_s14):
             _v14 = float(_s14.iloc[-1])
 
             def _hit14(series, start=None, gap=10):
@@ -1717,7 +1725,7 @@ def main(deep=True):
                         "est_days": int(_est14.sum()), "n": int(len(_s14)),
                         "marks": _marks14(_s14)}
             }
-            SRC["m14"] = "中证金融「融资融券账户统计」官方日频（2012-09-27 起）；Wind EDB M0076000 尾刷"
+            SRC["m14"] = "东方财富「两融账户信息」官方日频（平均维持担保比例，akshare 云端每日刷新；失败回退本地缓存）"
             log(f"  M14 融资盘担保比例 OK（{M['m14']['cur']['date']} {_v14:.2f}%，"
                 f"距227% {_v14 - 227:+.2f}pt；破线 全样本 {_n_all}天/{_r_all}轮、"
                 f"2015起 {_n15}天/{_r15}轮；估算段 {int(_est14.sum())} 天）")
@@ -1775,9 +1783,8 @@ def main(deep=True):
         {"k": "乐咕乐股", "v": "沪深300 / 上证红利 PE、PB 历史（月频；官方仅免费提供近 20 日）", "s": "fb"},
         {"k": "腾讯行情", "v": "兜底源，仅当官方源失败时启用", "s": "fb"},
         {"k": "AkShare", "v": "国债收益率兜底，仅当官方源失败时启用", "s": "fb"},
-        {"k": "Wind 万得", "v": "885003.WI 偏债混合、885001.WI 偏股混合、885006.WI 混合债券型一级"
-             "（官方 API 拉取全历史；手动低频执行，不纳入每日刷新）。注：881001.WI 万得全A 已不再作实时源，"
-             "M1 改用中证全指(000985)走中证官网/Tencent 云端每日刷新。", "s": "ok"},
+        {"k": "Wind 万得（已弃用）", "v": "原 M1(881001)、M3/M3b(885003)、M5(885006) 均已改用云端可刷源"
+             "（中证全指000985 / 申万807330 / 中证债基H11023）；Wind 本地缓存不再作实时源，仅留历史备份。", "s": "fb"},
     ]
 
     # ---- 模块兜底：本轮未算出的模块，沿用上一份 data.json 的既有结果 ----
@@ -1857,17 +1864,17 @@ def build_notes(used, SRC=None):
              "沪深300 当前 ROE 约 11%。PE/PB 的长周期历史<b>无官方免费接口</b>，乐咕是业内通用的第三方源。"},
         {"m": "M2", "t": "股债性价比为月频",
          "d": "受限于免费的指数 PE 源，股债性价比曲线为月频（每月最后一个交易日）。国债收益率为日频，按交易日对齐后向前填充。"},
-        {"m": "M3", "t": "万得偏债混合型基金指数(885003.WI) · Wind 真实数据",
+        {"m": "M3", "t": "偏债基准改用云端可刷的申万混合偏债指数(807330)",
          "d": "指标原话：<b>「沪深300指数基金的累计涨幅，跌至于偏债混合基金相若时，往往就是市场见底时」</b>——"
-             "即把<b>沪深300全收益(H00300)</b>与<b>万得偏债混合型基金指数(885003.WI)</b>两条累计涨幅曲线同起点对照，两线交汇即为底部信号。"
-             "红线使用中证官网官方全收益 H00300；橙线使用<b>Wind 真实 885003.WI</b>（经 Wind AImarket 拉取并缓存，"
-             "<b>手动/低频更新、不纳入每日刷新</b>）。两线均 rebase 到 2004-12-31=1000。"},
+             "即把<b>沪深300全收益(H00300)</b>与<b>偏债混合基金指数</b>两条累计涨幅曲线同起点对照，两线交汇即为底部信号。"
+             "红线使用中证官网官方全收益 H00300；橙线原用 Wind 885003.WI（云端无法刷新会冻结），现改用<b>申万宏源混合偏债基金指数(807330)</b>"
+             "（申万官方公开指数、云端每日刷新，885003 的公开等价物；2005~2009 段用 25/75 合成回补）。两线均 rebase 到 2004-12-31=1000。"},
         {"m": "M3", "t": f"沪深300 已用官方全收益 H00300（当前：{m3_eq}）",
          "d": "原文使用沪深300全收益，中证官网 <code>H00300</code> 即官方全收益指数，"
              "本模块已改用官方全收益，<b>不再有价格指数替代的偏差</b>。" if m3_eq == "H00300"
              else "官方全收益 H00300 本次未取到，暂用价格指数 000300，后续自动回补后切换。"},
-        {"m": "M5", "t": "已还原原文口径：中证偏股基金(930950) vs Wind 一级债基(885006)，2007-12-31=1000",
-         "d": "忠实复刻 EarlETF 原文（张翼轸复刻雪球 @qzy69）：<b>从 2008 年 A 股顶部(2007-12-31)起</b>，把偏股基金指数与<b>只能打新(后改投可转债)的一级债基</b>累计收益相比，<b>一级债基累计收益线(图中红线)＝偏股基金指数的估算顶线</b>——2015-06 与 2021-02 两次大顶，偏股都涨到贴近该线(比值 1.04 / 1.08)的位置。修正记录：此前误把偏股腿换成 885001(万得偏股混合)且基日取 2003-12-31，图形与原文差异巨大(885001 的 2021 顶超债基 34%，与原文「两次顶都只略高」不符)；2026-09-02 改回 <b>中证偏股基金指数(930950)</b>(即原文所指「偏股基金指数」) + <b>2007 年末锚点</b>。债基线用 <b>Wind 885006.WI</b>（张翼轸原文即用 Wind 一级债基指数替代易方达增强回报；缓存在缺失时降级 H11023）。<b>判读不看分位、看与红线(估算顶)的距离</b>：偏股贴近/上穿红线＝进入顶部估算区(2007 年以来上穿仅占 0.4% 交易日)；大幅低于红线(2024 年比值仅 0.51) 则离估算顶很远。"},
+        {"m": "M5", "t": "原文口径：中证偏股基金(930950) vs 中证债基(H11023，一级债基代用)，2007-12-31=1000",
+         "d": "忠实复刻 EarlETF 原文（张翼轸复刻雪球 @qzy69）：<b>从 2008 年 A 股顶部(2007-12-31)起</b>，把偏股基金指数与<b>只能打新(后改投可转债)的一级债基</b>累计收益相比，<b>一级债基累计收益线(图中红线)＝偏股基金指数的估算顶线</b>——2015-06 与 2021-02 两次大顶，偏股都涨到贴近该线(比值 1.04 / 1.08)的位置。修正记录：此前误把偏股腿换成 885001(万得偏股混合)且基日取 2003-12-31，图形与原文差异巨大(885001 的 2021 顶超债基 34%，与原文「两次顶都只略高」不符)；2026-09-02 改回 <b>中证偏股基金指数(930950)</b>(即原文所指「偏股基金指数」) + <b>2007 年末锚点</b>。债基线改用<b>中证债券基金指数(H11023)</b>（一级债基代用；原 Wind 885006.WI 为本地低频缓存、云端无法刷新会冻结，故弃用）。<b>判读不看分位、看与红线(估算顶)的距离</b>：偏股贴近/上穿红线＝进入顶部估算区(2007 年以来上穿仅占 0.4% 交易日)；大幅低于红线(2024 年比值仅 0.51) 则离估算顶很远。"},
         {"m": "M5b", "t": "@qzy69 原始口径 → 易方达增强回报债券(110017)",
          "d": "与 M5 同源思路，但债券基准改用 @qzy69 原始使用的一级债基「易方达增强回报」(110017, 2008-03-19 成立)。因该基金 2008 年才成立，两条曲线改从两者首个共同交易日起归一化到 1000。一级债基含打新增强，真实累计收益高于普通纯债，是最贴近原文的本土口径。"},
         {"m": "M7", "t": "国证成长100/价值100 → 国证成长/国证价值",
