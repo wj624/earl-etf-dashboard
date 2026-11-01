@@ -1,6 +1,6 @@
 # EarlETF 图表周刊 · 指标看板 —— 数据快照
 
-> 生成时间：2026-11-01 16:55（北京时间）　最新行情日：2026-10-30
+> 生成时间：2026-11-01 17:00（北京时间）　最新行情日：2026-10-30
 > 在线看板：https://wj624.github.io/earl-etf-dashboard/
 > 机器可读全量数据：https://wj624.github.io/earl-etf-dashboard/data.json
 
