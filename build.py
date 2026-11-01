@@ -114,6 +114,12 @@ def rebuild_anchor():
 def main():
     tpl = read("template.html")
     ec = read("echarts.min.js")
+    # data.js 自 2026-11-01 起不再进版本库：它就是 "window.DATA=" + data.json + ";"，
+    # 每天多提交 2.2MB 纯冗余。缺了就在这里现生成一份（与 fetch_data.py 写出的完全一致）。
+    if not os.path.exists(p("data.js")):
+        with open(p("data.js"), "w", encoding="utf-8") as fh:
+            fh.write("window.DATA=" + read("data.json") + ";")
+        print("data.js 缺失，已从 data.json 现生成")
     data = read("data.js")
 
     if ECHARTS_TAG not in tpl:

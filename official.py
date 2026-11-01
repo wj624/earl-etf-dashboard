@@ -83,15 +83,20 @@ def cnindex_daily(code, start="2005-01-01", end=None, tries=3):
 
 
 # ---------------------------------------------------------------- 中债登（中国 10Y）
-def chinabond_year(year, sess=None, tries=3):
-    """下载某一年的国债收益率曲线，返回 DataFrame[date(YYYYMMDD), cn10y]"""
+def chinabond_year(year, sess=None, tries=2):
+    """下载某一年的国债收益率曲线，返回 DataFrame[date(YYYYMMDD), cn10y]
+
+    tries 3→2、timeout 60→18（2026-11-01）：云端 runner 在国内站点上经常整段超时，
+    实测 run 41288279525 里 3 次 × 60s = 181s 全花在这里，占整轮 7 分钟的 43%，
+    而结果还是失败、退回缓存。缩短后最坏 ~36s，且失败会打日志（原来静默退回）。
+    """
     s = sess or _sess()
     for i in range(tries):
         try:
             r = s.get(CHINABOND_URL,
                       params={"year": str(year), "wrjxCBFlag": "0", "zblx": "",
                               "ycDefId": YCDEFID_CN_10Y, "locale": "zh_CN"},
-                      timeout=60,
+                      timeout=18,
                       headers={"Referer": "https://yield.chinabond.com.cn/"})
             if r.status_code == 200 and len(r.content) > 2000 and r.content[:2] == b"PK":
                 df = pd.read_excel(io.BytesIO(r.content))
@@ -142,6 +147,7 @@ def chinabond_10y(y0=2006, y1=None, log=print, sleep=1.2):
         d = chinabond_year(y, sess)
         if d is None or not len(d):
             if old is not None:
+                log(f"    中债登 {y}: 官方源超时/失败（{tries} 次），沿用缓存 {len(old)} 行")
                 frames.append(old)      # 当年抓取失败：退回旧缓存，别让整年消失
             else:
                 log(f"    中债登 {y} 年获取失败")
@@ -172,7 +178,7 @@ def ust_year(year, sess=None, tries=3):
     s = sess or _sess()
     for i in range(tries):
         try:
-            r = s.get(UST_URL.format(yr=year), timeout=60, headers={"Accept": "text/csv"})
+            r = s.get(UST_URL.format(yr=year), timeout=25, headers={"Accept": "text/csv"})
             if r.status_code == 200 and len(r.content) > 500:
                 df = pd.read_csv(io.StringIO(r.text))
                 col = None

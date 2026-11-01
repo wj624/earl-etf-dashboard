@@ -29,3 +29,6 @@ _syn*.js
 cache/_csi_waf_cooldown.txt
 # 个股成交额原始明细：几千个小文件，只在本机 tc_backfill 回补时存在，不进仓库
 cache/tc_raw/
+
+# data.js = "window.DATA=" + data.json，纯冗余（每天 2.2MB）。build.py 缺失时会自动生成。
+/data.js

@@ -300,6 +300,12 @@ def fetch_csi(code, deep=True):
     """中证行情：逐块落盘，断点续跑。deep=False 时只做增量（日常更新用）"""
     ck = f"csi{code}"
     old = load(ck)
+    if CSI_BLOCKED[0]:
+        # 本轮中证源已熔断：直接交回缓存，不发请求、也不再逐只空转。
+        # （旧行为：csindex_api 立刻返回空，但 fetch_csi 末尾仍要 sleep 一个 SLEEP，
+        #   一轮里 10 只被跳过的代码就是 35s 纯白等，且日志看不出被跳过。）
+        log(f"    ⏭ {code} 跳过中证源（本轮已熔断），沿用缓存")
+        return old
     end_s = TODAY.strftime("%Y%m%d")
     if old is None or len(old) == 0:
         old = pd.DataFrame(columns=["date", "close"])
@@ -746,9 +752,11 @@ def fetch_sw_fund_index(code="807330"):
         _u3.disable_warnings()
         url = "https://www.swsresearch.com/insWechatSw/fundIndex/getFundKChartData"
         hd = {"User-Agent": "Mozilla/5.0", "Content-Type": "application/json"}
-        # 申万站点证书链在本机会校验失败（CERTIFICATE_VERIFY_FAILED），故关闭校验
+        # 申万站点证书链在本机会校验失败（CERTIFICATE_VERIFY_FAILED），故关闭校验。
+        # timeout 40→15：云端 runner 访问该站经常直接卡死，实测 2026-11-01 一次栽 41s
+        # 才失败；这里只是 M3 的第二条腿，抓不到就沿用缓存，不值得等这么久。
         r = _rq.post(url, json={"swIndexCode": str(code), "type": "DAY"},
-                     headers=hd, timeout=40, verify=False)
+                     headers=hd, timeout=15, verify=False)
         rows = (r.json() or {}).get("data") or []
         if rows:
             df = pd.DataFrame(rows)
@@ -862,6 +870,20 @@ def _tencent_amounts(codes):
     return out
 
 
+def _tc_recent_path():
+    """tc_recent 缓冲的文件路径（读用）：优先 .csv.gz，兼容早期明文 .csv。
+
+    为什么要压缩：该文件是「最近 45 个交易日 × 5200 只」的明细，明文 8.1 MB，
+    每天全量重写一次 ⇒ 仓库一年要多背 ~3 GB。gzip 后约 1.2 MB，pandas 原生
+    读写 .gz（按扩展名自动压缩/解压），口径与内容完全不变。
+    """
+    for fn in ("tc_recent.csv.gz", "tc_recent.csv"):
+        p = os.path.join(CACHE, fn)
+        if os.path.exists(p):
+            return p
+    return os.path.join(CACHE, "tc_recent.csv.gz")
+
+
 def _tc_universe():
     """云端没有 cache/tc_raw 时的「股票池」兜底：从 tc_recent.csv 读最近 45 个交易日
     出现过的全部代码（该文件随仓库提交，含 5200+ 只，与历史回补池同源）。
@@ -870,7 +892,7 @@ def _tc_universe():
     历史回补的 tc_raw 是几千个个股小文件，不进 git；云端 checkout 拿不到，
     因而 _codes 恒为空、M13 增量分支永不执行（实测序列卡在 2026-10-26）。
     """
-    p = os.path.join(CACHE, "tc_recent.csv")
+    p = _tc_recent_path()
     if not os.path.exists(p):
         return []
     try:
@@ -1014,7 +1036,8 @@ def _tc_roll_maintain(snap, amt, codes):
     全部静默容错——失败不影响主流程（下次 run 补）。"""
     # 1) tc_recent（最近45交易日全市场缓冲，供周/月聚合与未来重算）
     try:
-        rp = os.path.join(CACHE, "tc_recent.csv")
+        rp = _tc_recent_path()                        # 读：优先 .csv.gz，兼容旧 .csv
+        rw = os.path.join(CACHE, "tc_recent.csv.gz")  # 写：统一 .gz（约 1.2MB，明文 8.1MB）
         recent = pd.read_csv(rp, dtype={"date": str, "code": str}) if os.path.exists(rp) else None
         if recent is not None and len(recent):
             recent = recent[recent["date"] != snap]
@@ -1025,7 +1048,7 @@ def _tc_roll_maintain(snap, amt, codes):
         ds = sorted(buf["date"].unique())
         keep = set(ds[-45:])
         buf = buf[buf["date"].isin(keep)]
-        buf.to_csv(rp, index=False)
+        buf.to_csv(rw, index=False)
         _freq_advance("tc_concentration_weekly.csv", snap, buf, kind="w")
         _freq_advance("tc_concentration_monthly.csv", snap, buf, kind="m")
     except Exception:
