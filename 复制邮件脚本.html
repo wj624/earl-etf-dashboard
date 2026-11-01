@@ -66,23 +66,29 @@
   <div class="card">
     <div style="font-weight:700;margin-bottom:4px;">贴进去之后按这个顺序做</div>
     <ol>
-      <li>打开 <a href="https://script.google.com/home" target="_blank" rel="noopener">script.google.com/home</a> → 左上「新项目」</li>
-      <li>项目名改成 <b>A股每日解读</b></li>
-      <li>把上面这段代码全部粘进去，覆盖掉默认的 <code>myFunction</code>，<code>Ctrl+S</code> 保存</li>
-      <li><b>设置两个密钥</b>（只需一次，都不写在代码里）：<br>
-          Gemini（AI 总结）：去
-          <a href="https://aistudio.google.com/apikey" target="_blank" rel="noopener">aistudio.google.com/apikey</a>
-          申请，临时加一行并运行：
-          <div style="margin:6px 0"><code>function setupGemini() { setGeminiKey('粘贴密钥'); }</code></div>
-          FRED（美债）：去
-          <a href="https://fredaccount.stlouisfed.org/apikeys" target="_blank" rel="noopener">fredaccount.stlouisfed.org/apikeys</a>
-          申请，临时加一行并运行：
-          <div style="margin:6px 0"><code>function setupFred() { setFredKey('粘贴密钥'); }</code></div>
-          看到「✅ 已保存密钥：AIzaSy…xxxx」后，<b>把这两行都删掉</b>再保存</li>
-      <li>在编辑器顶部下拉里选 <code>testConnections</code> → 点「运行」→ 授权（高级 → 前往项目（不安全）→ 允许）</li>
-      <li>选 <code>previewNow</code> → 运行，去邮箱看效果</li>
-      <li>选 <code>installDailyTrigger</code> → 运行，装上每天 19:15 的定时器</li>
-      <li>点左侧闹钟图标「触发器」，确认有一条 <code>dailyMain</code> / 每天 / 下午 7 点~8 点</li>
+      <li>打开 <a href="https://script.google.com/home" target="_blank" rel="noopener">script.google.com/home</a> →
+          打开<b>你已有的项目</b>（第一次用就点左上「新项目」，项目名建议叫 <b>A股每日解读</b>）</li>
+      <li>把上面这段代码全部粘进去，覆盖掉原来的内容（新项目里是默认的 <code>myFunction</code>），<code>Ctrl+S</code> 保存</li>
+      <li><b>第一次运行任何函数都会弹授权</b>：点「高级」→「前往项目（不安全）」→「允许」。
+          这是 Google 对未验证脚本的通用拦截，不是报错</li>
+      <li><b>设置两个密钥</b>（只需一次，都不写进代码）。文件里已经有一个现成的 <code>setupKeys()</code>，
+          把两个空引号换成你的密钥：
+          <div style="margin:6px 0"><code>setGeminiKey('AIza...你的Gemini密钥');&nbsp;&nbsp;// 39 位，AIza 开头</code></div>
+          <div style="margin:6px 0"><code>setFredKey('355d...你的FRED密钥');&nbsp;&nbsp;// 32 位</code></div>
+          申请地址：Gemini 去
+          <a href="https://aistudio.google.com/apikey" target="_blank" rel="noopener">aistudio.google.com/apikey</a>，
+          FRED 去
+          <a href="https://fredaccount.stlouisfed.org/apikeys" target="_blank" rel="noopener">fredaccount.stlouisfed.org/apikeys</a>。<br>
+          改完在顶部下拉里选 <b><code>setupKeys</code></b> 运行 → 看到两条
+          <code>✅ 已保存…（39 位）/（32 位）</code> → 再把两个密钥删回空字符串 <code>''</code> → <code>Ctrl+S</code>
+          <br>⚠️ <b>不要直接选中 <code>setGeminiKey</code> / <code>setFredKey</code> 运行</b> ——
+          它们是带参数的函数，直接运行等于没传参，只会打印用法、<b>什么都不会保存</b></li>
+      <li>选 <code>keyDiag</code> → 运行，核对：探针能写能读，两个密钥都显示「…（39 位）/（32 位）」</li>
+      <li>选 <code>testConnections</code> → 运行，看三条链路（数据源 / FRED / Gemini）是不是都 ✅</li>
+      <li>选 <code>previewNow</code> → 运行，去邮箱看效果（没收到先翻垃圾邮件箱）</li>
+      <li>选 <code>installDailyTrigger</code> → 运行，装上每天 19:15 的定时器
+          （会先清空本项目原有触发器，重复跑是安全的）</li>
+      <li>点左侧闹钟图标「触发器」，确认有一条 <code>dailyMain</code> / 时间驱动 / 每天 / 下午 7 点~8 点</li>
     </ol>
     <div class="tip" style="background:#eff6ff;border-color:#bfdbfe;color:#1e40af">
       数据源地址已经写好，不用改。想改收件人、发信时间、开关 AI，只动文件顶部的 <code>CONFIG</code>。
@@ -91,7 +97,10 @@
       <b>代码里没有密钥，这是故意的。</b>本页的脚本会提交到公开仓库，如果把 Gemini / FRED 密钥写进代码，
       Google / FRED 的扫描器会扫到并判定「泄露」，直接永久作废
       （Gemini 报错 <code>403 Your API key was reported as leaked</code>）。
-      密钥要存在 Apps Script 的「脚本属性」里，用 <code>setGeminiKey()</code> / <code>setFredKey()</code> 设置一次即可。
+      密钥一律用 <code>setupKeys()</code> 存进「项目设置 → 脚本属性」，存完再把密钥从代码里删掉。
+      <br><b>另：脚本属性是「项目级」的。</b>换一个新的 Apps Script 项目，密钥全是空的；
+      定时器也只挂在具体项目上 —— 如果两个项目都装了 <code>dailyMain</code>，你会收到两封邮件，
+      点「触发器」删掉多余的那个。
     </div>
   </div>
 
