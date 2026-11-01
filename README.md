@@ -1,7 +1,6 @@
 # EarlETF 图表周刊 · 指标看板
 
-> **在线看板（点开即用）**：<https://wj624.github.io/earl-etf-dashboard/>
-> **另一个版本**：<https://wwww1998.github.io/earl-etf-dashboard/>
+> **在线看板（点开即用）**：<https://wj624.github.io/earl-etf-dashboard/>  
 > **五年之锚 v2（独立页）**：<https://wj624.github.io/earl-etf-dashboard/anchor_v2.html>  
 > **源码仓库**：<https://github.com/wj624/earl-etf-dashboard>
 
@@ -58,11 +57,47 @@
 
 | 文件 | 大小 | 内容 |
 |---|---|---|
-| `llms.txt` | 8.6KB | 20 个指标的当前读数 + 各自数据截止日 + 判读口径 + 交叉判读提示 + 名词速查 |
-| `snapshot.md` | 8.6KB | 同上内容的 Markdown 版（在 GitHub 上可直接渲染阅读） |
+| `llms.txt` | 10KB | 20 个指标的当前读数 + 各自数据截止日 + 判读口径 + 交叉判读提示 + 名词速查 |
+| `snapshot.md` | 10KB | 同上内容的 Markdown 版（在 GitHub 上可直接渲染阅读） |
 | `latest.json` | 7.6KB | 同上内容的结构化版本，字段与 `data.json` 的 `cur` 一致 |
 
 **用法**：把 `llms.txt` 的地址发给大模型（或直接把全文贴进对话框），它就能真的回答「现在 A 股什么位置」，而不只是复述指标定义。
+
+---
+
+## 和上游原版（wwww1998）比，改了些什么
+
+本仓库复制自 [wwww1998/earl-etf-dashboard](https://github.com/wwww1998/earl-etf-dashboard)。
+**20 个指标的算法、图表口径完全没动**，改的全部是「怎么让它跑得下去」。
+
+一句话概括上游的做法：**关掉云端，改在本机跑**。原作者 2026-09-18 把 `schedule` 注释掉，改用 Windows 计划任务每天 18:30 在自己电脑上执行、跑完再 `git push`。在他自己机器上没问题（家里宽带 IP 不会被中证官网当爬虫封、本地有完整的原始缓存），但换台机器就复现不了。
+
+本版改成**纯云端**，不依赖任何本机环境。
+
+| 项目 | 上游原版 | 本版 |
+|---|---|---|
+| 谁在跑 | 本机 Windows 计划任务，云端 `schedule` 已注释 | GitHub 云端，每天 18:30 |
+| 仓库体积 | 108.4 MB | **14.1 MB** |
+| 每天提交量 | 约 12–17 MB | 约 8.3 MB |
+| 一次运行耗时 | 本机跑，无上限 | **2 分 46 秒** |
+| 中证 403 熔断 | 阈值 2，**单只**指数连撞两次就全局熔断 | 阈值 3，且**只数不同代码** |
+| 抓取顺序 | 写死在代码的字典里 | **最落后的先抓** |
+| M13 交易集中度 | 依赖 `cache/tc_raw/`（只有本机有）→ 云端恒空、序列永久冻结 | 从 `tc_recent.csv.gz` 借 5200+ 只股票池 |
+| `actions/cache` | 固定 key，永不更新，还会盖掉 checkout 的新文件 | 已删除 |
+| `requirements.txt` | 3 个包，缺 `akshare` | 已补齐 |
+| 给 AI 的文本摘要 | 无 | `llms.txt` / `snapshot.md` / `latest.json` |
+
+### 几个改动的原因
+
+- **熔断阈值**：上游是「一个代码被限流，后面排队的一起被掐死」。实测 `931591` 连撞 3 次 403 就触发全局熔断，导致排在它后面的 M6B、M9 **停更 9 个交易日**——而源头数据一直有。本版把「单只被限流」和「整个 IP 被封」分成两类信号处理。
+- **仓库体积**：上游每天全量重写 `tc_recent.csv`（7.7 MB 明文）+ `data.js`（2.1 MB），一年滚到 108 MB。本版把前者压成 `.csv.gz`（7.7 MB → 1.3 MB），后者直接不入库（它就是 `data.json` 的副本，构建时缺失会现生成）。
+- **提速 7 分 02 秒 → 2 分 46 秒**：其中 3 分 08 秒只来自一件事——中债登接口超时设的是 60 秒 × 3 次，整段其实全花在等超时上，收紧到 18 秒 × 2 次即可。剩下的时间基本砍不掉：约 63 秒是抓指数时**被迫的间隔等待**（间距一压，中证官网就封 IP，反而更慢）。
+
+### 两个版本怎么选
+
+- **不想管、要长期稳定** → 本版（纯云端，2 分 46 秒，14 MB）
+- **本机能常开、要最快** → 上游（本机跑不受 403 限制，代码更简单）
+- **都留着** → 上游当主站、本版当备选，任一方挂了另一个还在
 
 ---
 
@@ -525,7 +560,9 @@ schedule:
   - cron: '30 10 * * *'   # 10:30 UTC = 18:30 北京时间
 ```
 
-工作流做的事：装依赖 → 判断缓存充不充足（`cache/csi*.csv` ≥ 15 个走 `--quick` 增量模式）→ 跑 `fetch_data.py` → 跑 `build.py` 打包 → 提交 `index.html data.json data.js version.txt cache/`。内容没有变化时自动跳过提交。
+工作流做的事：装依赖 → 判断缓存充不充足（`cache/csi*.csv` ≥ 15 个走 `--quick` 增量模式）→ 跑 `fetch_data.py` → 跑 `build.py` 打包 → 生成 `llms.txt` 等 AI 摘要 → 提交 `index.html anchor_v2.html data.json version.txt llms.txt snapshot.md latest.json cache/`。内容没有变化时自动跳过提交。
+
+> `data.js` 不在提交列表里：它是 `data.json` 的副本（`window.DATA=` + JSON），纯冗余。`build.py` 发现缺失会自动现生成。
 
 ## 想改更新时间？
 
@@ -542,6 +579,8 @@ schedule:
 
 ## 为什么原作者停用了云端定时任务，这里却能开？
 
+> 与上游的完整差异清单见顶部「[和上游原版（wwww1998）比，改了些什么](#和上游原版wwww1998比改了些什么)」，这里只说定时任务这一件事。
+
 原作者在 2026-09-18 主动注释掉了 schedule，注释里写明原因——**本机与云端双写互相覆盖**：
 
 1. 云端 checkout 仓库里的 `template.html` 重建 `index.html`，覆盖了本机用新版模板推出的完整版 → 页面出现「数据补充中」空白卡；
@@ -554,7 +593,7 @@ schedule:
 # 第九部分 · 本地运行
 
 ```bash
-pip install -r requirements.txt   # requests numpy pandas（另需 akshare）
+pip install -r requirements.txt   # requests / numpy / pandas / akshare
 python fetch_data.py --quick      # 增量快跑，日常用这个
 python build.py                   # 打包成自包含 index.html
 ```
@@ -634,7 +673,7 @@ python backfill.py 2              # 中证官网补洞守护进程，最多跑 2
 | 数据看板（本仓库） | GitHub Pages + Actions | 每天 18:30 抓数、算指标、生成 `latest.json` / `llms.txt` |
 | 邮件脚本（`gas-earl-daily.gs`） | Google Apps Script | 每天 19:15 读取上面两个文件，发邮件 |
 
-> **想让 AI 帮你分析时，喂 `llms.txt`（推荐）。** 它把 20 个指标的当日读数、截止日、判读口径、交叉判读方法和名词解释都压成 ~9KB 的纯文本，直接整段贴给 Gemini / ChatGPT 就行，不需要再补背景。
+> **想让 AI 帮你分析时，喂 `llms.txt`（推荐）。** 它把 20 个指标的当日读数、截止日、判读口径、交叉判读方法和名词解释都压成 ~10KB 的纯文本，直接整段贴给 Gemini / ChatGPT 就行，不需要再补背景。
 > `latest.json`（7.6KB）是同一份内容的结构化版，适合程序读、或只想要数字时用；`data.json`（2.2MB）是全量日线原始数据，只有自己画图时才需要。
 > 三个文件都由 `make_llm_summary.py` 从 `data.json` 生成，**同源同口径**，不会互相矛盾。
 
