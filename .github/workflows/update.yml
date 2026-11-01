@@ -34,14 +34,13 @@ jobs:
       - name: 安装依赖
         run: pip install requests numpy pandas akshare
 
-      # 缓存作为加速层（cache miss 时靠 git checkout 的缓存文件兜底）
-      - name: 恢复缓存
-        uses: actions/cache@v4
-        id: cache
-        with:
-          path: cache
-          key: etf-cache-v2
-
+      # 【2026-11-01 移除 actions/cache】原做法是 path: cache + 固定 key "etf-cache-v2"。
+      # actions/cache 的 key 是**不可变**的：首次写入后再也不会更新，日志里一直是
+      #   `Cache hit occurred on the primary key etf-cache-v2, not saving cache.`
+      # 于是它每次恢复的都是同一份 10 月底的旧快照，运行期间写进 cache/ 的新内容
+      # 在任务结束时全部丢弃；更糟的是 tar 解包发生在 checkout 之后，旧快照会盖掉
+      # 仓库里更新的同名文件。实测 cache/ 下的文件（csi*/tc_*/wind*/tc_000985_ohlc 等）
+      # 全部已纳入 git 跟踪并随每次运行提交 ⇒ 缓存层零收益、只有回退风险，直接删掉。
       - name: 保证 cache 目录存在
         run: mkdir -p cache
 
@@ -53,7 +52,7 @@ jobs:
         env:
           TZ: Asia/Shanghai
         run: |
-          # 检查缓存是否充足（git checkout 自带完整缓存，actions/cache 作为加速）
+          # 缓存全部来自 git checkout（cache/ 已全量纳入版本库），这里只做数量体检
           CSI_COUNT=$(find cache -maxdepth 1 -name "csi*.csv" 2>/dev/null | wc -l)
           echo "cache 中 csi*.csv 数量: $CSI_COUNT"
 
