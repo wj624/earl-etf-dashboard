@@ -641,23 +641,24 @@ python backfill.py 2              # 中证官网补洞守护进程，最多跑 2
 
 > 想省事就直接开 **<https://wj624.github.io/earl-etf-dashboard/复制邮件脚本.html>** —— 页面里点「复制全文」，然后跳到第 3 步。
 
-1. 打开 <https://script.google.com/home> → 左上「新项目」。
-2. 项目名改成「A股每日解读」。
-3. 把 `gas-earl-daily.gs` 全文粘进编辑器，**覆盖掉默认的空 `myFunction`**，`Ctrl+S` 保存。
-4. **设置密钥**（只需一次）。本脚本有两类密钥，都**不写在代码里**，而是存进「脚本属性」：
-   - **Gemini 密钥**（AI 总结用）：去 <https://aistudio.google.com/apikey> 申请，然后临时在代码末尾加一行并运行：
-     ```js
-     function setupGemini() { setGeminiKey('粘贴密钥'); }
-     ```
-   - **FRED 密钥**（美债数据用）：去 <https://fredaccount.stlouisfed.org/apikeys> 申请，临时加一行并运行：
-     ```js
-     function setupFred() { setFredKey('粘贴密钥'); }
-     ```
-   看到「✅ 已保存密钥：AIzaSy…xxxx」后，**把这行删掉**再保存。
-5. 运行 `testConnections()` → 选它点「运行」→ 授权（高级 → 前往项目（不安全）→ 允许）。看日志确认三个接口都通。
-6. 运行 `previewNow()` → 运行，去邮箱看效果。
-7. 运行 `installDailyTrigger()` → 运行，装上每天 19:15 的定时器。
-8. 点左侧闹钟图标「触发器」，确认有一条 `dailyMain` / 时间驱动 / 每天 / 下午 7 点~8 点。
+1. 打开 <https://script.google.com/home> → 打开**你已有的项目**（第一次用就点左上「新项目」，建议命名「A股每日解读」）。
+2. 把 `gas-earl-daily.gs` 全文粘进编辑器，覆盖掉原来的内容（新项目里是默认的 `myFunction`），`Ctrl+S` 保存。
+3. **第一次运行任何函数都会弹授权**：点「高级」→「前往项目（不安全）」→「允许」。这是 Google 对未验证脚本的通用拦截，不是报错。
+4. **设置密钥**（只需一次，都不写进代码）。脚本里已经有一个现成的 `setupKeys()`，把两个空引号换成你的密钥：
+   ```js
+   function setupKeys() {
+     setGeminiKey('AIza...你的Gemini密钥');   // 39 位，AIza 开头
+     setFredKey('355d...你的FRED密钥');       // 32 位
+   }
+   ```
+   申请地址：Gemini <https://aistudio.google.com/apikey>、FRED <https://fredaccount.stlouisfed.org/apikeys>。
+   改完在顶部下拉里选 **`setupKeys`** 运行 → 看到两条 `✅ 已保存…（39 位）/（32 位）` → 再把两个密钥删回空字符串 `''` → `Ctrl+S`。
+   > ⚠️ **不要直接选中 `setGeminiKey` / `setFredKey` 运行**——它们是带参数的函数，直接运行等于没传参，只会打印用法、**什么都不会保存**。这是「跑了但没生效」的头号原因。
+5. 运行 `keyDiag()`，核对：探针能写能读、两个密钥都显示 `…（39 位）/（32 位）`。
+6. 运行 `testConnections()`，看三条链路（数据源 / FRED / Gemini）是否都 ✅。
+7. 运行 `previewNow()`，去邮箱看效果（没收到先翻垃圾邮件箱）。
+8. 运行 `installDailyTrigger()`，装上每天 19:15 的定时器（会先清空本项目原有触发器，重复跑安全）。
+9. 点左侧闹钟图标「触发器」，确认有一条 `dailyMain` / 时间驱动 / 每天 / 下午 7 点~8 点。
 
 ### ⚠️ 密钥为什么不能写在代码里
 
@@ -668,9 +669,20 @@ FRED 同样会被封）。所以密钥一律走 `setGeminiKey` / `setFredKey` �
 
 ### 密钥出问题怎么排查
 
-- **Gemini 报 403 `reported as leaked`**：密钥被 Google 判定泄露并永久作废。**改配置没用**，必须去 AI Studio 新建一把，再 `setGeminiKey('新密钥')`。这正是把密钥移出代码的原因——之前写在代码里被公开仓库扫到就会作废。
+先跑一次 `keyDiag()`，它会把结论直接打出来。常见几种情况：
+
+| 现象 | 原因 | 怎么办 |
+|---|---|---|
+| `keyDiag` 显示属性 0 个 | 这个项目从没成功跑过 `dailyMain`（连 `LAST_ASOF` 都没有） | 多半是换过项目：**脚本属性是项目级的**，新项目一片空白，密钥得重设；定时器也只挂在具体项目上 |
+| 跑了 `setGeminiKey` 但属性还是空 | 直接在函数下拉里选中 `setGeminiKey` 运行了 —— 它带参数，直接跑等于没传 | 改成把密钥填进 `setupKeys()` 再运行 `setupKeys` |
+| 提示「❌ 没有保存：这是文档里的占位符」 | 把 `粘贴密钥` / `替代防泄密` 这类占位文字当密钥传进去了 | 换成真密钥；`keyReject_()` 会把非 ASCII、超短、占位符挡在写库之前 |
+| Gemini 报 403 `reported as leaked` | 密钥被 Google 判定泄露并**永久作废**，改配置没用 | 去 AI Studio 新建一把，再 `setupKeys` 重设 |
+| FRED 报 HTTP 400 `not registered` | 密钥无效/写错 | 核对是否为 32 位小写字母+数字 |
+| FRED 报 HTTP 500 | **FRED 服务端抖动**，与密钥无关 | 脚本已自动退避重试 3 次（1.5s / 3.5s）；仍失败就等下一次，或临时把 `WITH_FRED` 设为 `false` |
+
 - 跑 `listGeminiModels()`：它会直接问 Google 你这把密钥能用哪些模型，列不出来时分两种情况给出对应修法（密钥作废 / 没开 Generative Language API）。
 - 模型改名或下线：脚本会自动发现你账号下能用的对话模型并优先使用，一般不用手改 `GEMINI_MODELS`。
+- **两个项目都装了触发器**会收到两封邮件，去「触发器」里删掉多余的那个。
 
 ### 会主动不发的情况
 
