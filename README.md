@@ -596,7 +596,12 @@ python backfill.py 2              # 中证官网补洞守护进程，最多跑 2
 4. **提交内容里必须包含 `version.txt`**，否则前端版本探针会卡在旧版本。
 5. **Wind 缓存只当历史用。** 885003/885006 的本地缓存是**不可变历史段**（数据永不再变），M3/M3b/M5 的续接点之后由云端源（807330 / H11023）每日续接，所以这几张图的日期现在也会每天前进。**不要删 `cache/wind885003.csv`、`cache/wind885006.csv`**，删了会退化到 25/75 合成口径，历史曲线会被改写。
 6. **新增指标时，`make_llm_summary.py` 的 `META` 和 `reading()` 要同步改。** `META` 决定该指标在摘要里叫什么、归到哪一组、判读口径怎么写；`reading()` 决定它的读数怎么压成一行。漏改不会报错，但摘要里那一行会显示「（读取失败：…）」并把原始 JSON 附上。
-7. **摘要文件是构建产物，不要手改。** 改了下次构建会被覆盖；要调整内容请改 `make_llm_summary.py`，本地先跑 `python make_llm_summary.py --check` 预览，满意再正式生成。
+7. **换数据源 = 三处一起改，缺一不可。** `fetch_data.py` 只管数据，**页面上显示的文字是写死的**：
+   `template.html` 里的卡片标题、图表图例、`<details>` 说明都有硬编码的标的名称（如「万得全A」「885003.WI」），
+   另有 `make_llm_summary.py` 的 `META`（进 `latest.json`/`llms.txt`/邮件）和 `README.md`。
+   只改 `fetch_data.py` 不会报错，但页面会出现「新数据配旧口径」——这是本项目最容易漏的一类错误。
+   改完务必 `python build.py` 重建 `index.html`，否则前端仍是旧文案。
+8. **摘要文件是构建产物，不要手改。** 改了下次构建会被覆盖；要调整内容请改 `make_llm_summary.py`，本地先跑 `python make_llm_summary.py --check` 预览，满意再正式生成。
 
 ---
 
@@ -619,6 +624,10 @@ python backfill.py 2              # 中证官网补洞守护进程，最多跑 2
 |---|---|---|
 | 数据看板（本仓库） | GitHub Pages + Actions | 每天 18:30 抓数、算指标、生成 `latest.json` / `llms.txt` |
 | 邮件脚本（`gas-earl-daily.gs`） | Google Apps Script | 每天 19:15 读取上面两个文件，发邮件 |
+
+> **想让 AI 帮你分析时，喂 `llms.txt`（推荐）。** 它把 20 个指标的当日读数、截止日、判读口径、交叉判读方法和名词解释都压成 ~9KB 的纯文本，直接整段贴给 Gemini / ChatGPT 就行，不需要再补背景。
+> `latest.json`（7.6KB）是同一份内容的结构化版，适合程序读、或只想要数字时用；`data.json`（2.2MB）是全量日线原始数据，只有自己画图时才需要。
+> 三个文件都由 `make_llm_summary.py` 从 `data.json` 生成，**同源同口径**，不会互相矛盾。
 
 ### 部署步骤
 
