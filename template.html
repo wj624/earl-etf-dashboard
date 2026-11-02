@@ -109,6 +109,11 @@ tbody tr:hover{background:#fafbfc}
 #sumBody tr.jrow td:first-child::after{content:"↗";font-size:11px;color:#c2cad6;margin-left:6px}
 #sumBody tr.jrow:hover td:first-child::after{color:var(--blue)}
 #sumBody tr.jrow:focus-visible{outline:2px solid var(--blue);outline-offset:-2px}
+/* 轮动三棱镜：备注里直接给「偏向哪一边」 */
+.rotbuy{display:block;font-weight:700;color:var(--tx);line-height:1.4}
+.rotbuy em{font-style:normal;color:var(--blue);font-size:14px}
+.rotwhy{display:block;margin-top:1px;line-height:1.5}
+.rotsig{display:block;margin-top:2px;font-size:11px;color:#aab4c4;line-height:1.45}
 
 footer{color:var(--tx3);font-size:12px;text-align:center;padding:26px 0 0;border-top:1px solid var(--line);margin-top:26px}
 .note{background:var(--bluebg);border:1px solid #dbeafe;border-radius:8px;padding:11px 14px;
@@ -839,7 +844,7 @@ function buildSummary(){
     const s=countSig(m);
     add(`${PRISM_NO[k]} · 轮动三棱镜 · ${m.labels[0]} ÷ ${m.labels[1]}`, `${s.n}/3`,
       s.n>=2?'⚠ 轮动信号触发':(s.n===1?'有个别信号':'无信号'),
-      s.n>=2?'hot':(s.n===1?'mid':'mid'), s.txt, k.indexOf('m6')===0?'#m6':'#m7'); });
+      s.n>=2?'hot':(s.n===1?'mid':'mid'), rotHint(k,m,s) || s.txt, k.indexOf('m6')===0?'#m6':'#m7'); });
   if(M.m8){ const p=pctile(M.m8.data.cols[0],M.m8.cur.dy);
     add('8 · 中证红利股息率', fmt(M.m8.cur.dy)+'%',
       p>70?'股息率高 / 安全边际厚':(p<30?'股息率被压缩':'中性'), p>70?'cold':(p<30?'hot':'mid'),
@@ -930,6 +935,36 @@ function countSig(m){
   const x = zeroCross(m);
   if(x){ n++; t.push(x); }
   return {n, txt:t.length?t.join('、'):'三信号均未触发'};
+}
+
+// 轮动三棱镜 = 两条指数相除(前 ÷ 后)：比值走强=前一边相对占优，走弱=后一边占优。
+// 下面把三个技术信号翻译成「现在该偏向买哪一边」，直接写进信号汇总的备注列。
+const ROT_NAMES = {
+  m6a:['300成长', '300价值'],
+  m6b:['1000成长', '1000价值'],
+  m6c:['沪深300·大盘', '中证1000·小盘'],
+  m7 :['国证成长', '国证价值'],
+};
+function rotHint(k, m, s){
+  const c=m.cur||{}, nm=ROT_NAMES[k];
+  if(!nm || c.ratio==null || c.ma5==null) return null;
+  const r=c.ratio, ma5=c.ma5, up=c.boll_up, dn=c.boll_dn, dma=c.d40ma;
+  const dev=(r/ma5-1)*100;                       // 比值相对五年均线的偏离
+  const buyB = dev<0;                            // 比值在五年均线下方 → 后一边（价值/小盘）相对占优
+  const buy  = buyB ? nm[1] : nm[0];
+  const weak = buyB ? nm[0] : nm[1];
+  let why = `比值 ${fmt(r,3)} ${buyB?'低于':'高于'}五年均线 ${fmt(ma5,3)}（${dev>0?'+':''}${fmt(dev,1)}%）`;
+  const pos = (up!=null && dn!=null && up>dn) ? (r-dn)/(up-dn) : null;   // 在布林带里的位置 0~1
+  if(pos!=null && pos>0.97)       why += '；已贴近布林上轨，强势但别追高';
+  else if(pos!=null && pos<0.03)  why += `；${weak}跌破布林下轨，超跌反弹时可能回摆`;
+  if(Math.abs(dev)<2)             why += '；刚跨过五年均线，优势很薄';
+  const momA = (dma!=null && dma>0);             // 40日收益差均线仍在 0 上方 = 前一边短期还强
+  if((buyB && momA) || (!buyB && !momA)) why += '；短期动能尚未转向，等确认';
+  // 措辞跟着信号强度走，避免「0/3 无信号」却写成强结论
+  const verb = s.n>=2 ? '偏向买' : (s.n===1 ? '略偏' : '暂偏');
+  return `<span class="rotbuy">→ ${verb} <em>${buy}</em></span>`
+       + `<span class="rotwhy">${why}</span>`
+       + `<span class="rotsig">信号 ${s.n}/3：${s.txt}</span>`;
 }
 
 // ---- M1 ----
