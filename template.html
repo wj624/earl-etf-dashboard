@@ -949,29 +949,25 @@ const ROT_NAMES = {
 function rotHint(k, m, s){
   const c=m.cur||{}, nm=ROT_NAMES[k];
   if(!nm || c.ratio==null || c.ma5==null) return null;
-  const r=c.ratio, ma5=c.ma5, up=c.boll_up, dn=c.boll_dn, dma=c.d40ma;
+  const r=c.ratio, ma5=c.ma5, dma=c.d40ma;
   const dev=(r/ma5-1)*100;                       // 比值相对五年均线的偏离
   const buyB = dev<0;                            // 比值在五年均线下方 → 后一边（价值/小盘）相对占优
   const buy  = buyB ? nm[1] : nm[0];
-  const weak = buyB ? nm[0] : nm[1];
-  let why = `比值 ${fmt(r,3)} ${buyB?'低于':'高于'}五年均线 ${fmt(ma5,3)}（${dev>0?'+':''}${fmt(dev,1)}%）`;
-  const pos = (up!=null && dn!=null && up>dn) ? (r-dn)/(up-dn) : null;   // 在布林带里的位置 0~1
-  if(pos!=null && pos>0.97)       why += '；已贴近布林上轨，强势但别追高';
-  else if(pos!=null && pos<0.03)  why += `；${weak}跌破布林下轨，超跌反弹时可能回摆`;
-  if(Math.abs(dev)<2)             why += '；刚跨过五年均线，优势很薄';
-  // 40日收益差均线在 0 上方 = 前一边短期还强；只有偏离够大（>0.5pt）才算「动能仍在另一边」
-  const momA = (dma!=null && Math.abs(dma)>0.5) ? (dma>0) : null;
-  if(momA!=null && ((buyB && momA) || (!buyB && !momA))) why += '；短期动能仍在另一边，等转向再动';
-  // 措辞跟着信号强度走，避免「0/3 无信号」却写成强结论
-  // 注意：本指标判的是「1–2 个季度」的相对强弱切换，不是一年以上的配置方向
+  const weak = buyB ? nm[0] : nm[1];             // 相对跑输的那一边
   const verb = s.n>=2 ? '短期偏向买' : (s.n===1 ? '短期略偏' : '短期暂偏');
-  // 长期那一面必须写出来：比值在均线一侧待久了，一年尺度上多数会均值回归
+  // 第 2 行：先把「比值=强弱、不是价格」点破，再说偏离幅度
+  const devTxt = Math.abs(dev)>=10 ? fmt(Math.abs(dev),0) : fmt(Math.abs(dev),1);
+  let why = `比值 ${fmt(r,3)}（${nm[0]}÷${nm[1]}）${buyB?'低于':'高于'}五年均线 ${devTxt}%：`
+          + `是${weak}跑输，不是它便宜`;
+  const momA = (dma!=null && Math.abs(dma)>0.5) ? (dma>0) : null;
+  if(momA!=null && ((buyB && momA) || (!buyB && !momA))) why += '；动能还没转过来';
+  // 第 3 行：一年尺度（跌多的一方大概率补涨）
   const longTxt = Math.abs(dev)>=3
-    ? `一年尺度：比值${buyB?'低于':'高于'}五年均线 ${fmt(Math.abs(dev),0)}%，历史上多会回归 —— ${weak}有补涨空间`
-    : `一年尺度：比值与五年均线仅差 ${fmt(Math.abs(dev),1)}%，没有明显的回归空间`;
+    ? `↺ 一年尺度：跑输的一方跌得更多，通常会有补涨 —— ${weak}`
+    : `↺ 一年尺度：比值离均线只差 ${fmt(Math.abs(dev),1)}%，补涨空间不明显`;
   return `<span class="rotbuy">→ ${verb} <em>${buy}</em></span>`
        + `<span class="rotwhy">${why}</span>`
-       + `<span class="rotlong">↺ ${longTxt}</span>`
+       + `<span class="rotlong">${longTxt}</span>`
        + `<span class="rotsig">信号 ${s.n}/3：${s.txt}</span>`;
 }
 
@@ -1418,6 +1414,8 @@ function rPrism(key, ids, titleEl, idx){
     ['看什么','① 比值是否突破 <b>252 日布林线</b>上下轨；② 比值是否跌破 <b>五年均线</b>；③ <b>40日收益差</b>的 252 日均线是否<b>穿越 0 轴</b>（必须是穿越动作，不是单纯在 0 轴上方/下方）。'],
     ['怎么用','三个信号<b>凑齐两个</b>，就应对一轮轮动<b>高度重视</b>。比值<b>上行</b>＝<b>'+m.labels[0]+'</b>走强，比值<b>下行</b>＝<b>'+m.labels[1]+'</b>走强。'
       + '<br><b>时间尺度（重要）</b>：本指标判的是 <b>1–2 个季度</b>的相对强弱切换，不是一年以上的配置方向。实算：比值<b>跌破五年均线后 120 个交易日</b>仍继续下跌的样本占 <b>65%–100%</b>（短期跟趋势）；但拉到 <b>250 个交易日（约一年）</b>，「处于均线下方」的样本比值中位数多为 <b>+8% 上下</b>（6③ 为 −2.8%），即前一边补涨（长期均值回归）。<b>短期跟趋势、一年维度反着想，两者不矛盾</b>——别用同一个结论套两个周期。'],
+    ['别误读：比值不是价格', (m.indices ? `两条指数是<b>同基点</b>的（${m.indices.dates[0]} 分别约 ${fmt(m.indices.cols[0][0],0)} / ${fmt(m.indices.cols[1][0],0)}），现在前者 <b>${fmt(m.indices.cols[0][m.indices.cols[0].length-1],0)}</b>、后者 <b>${fmt(m.indices.cols[1][m.indices.cols[1].length-1],0)}</b>。<br>` : '')
+      + '比值低＝<b>前一边累计涨得少、近期跑输</b>，<b>不等于它"在打折"</b>——指数点位是累计收益，不是标价。要判断"便宜"，得看 <b>PE/PB</b>（见第 12 张沪深300市盈率），不是看点位。<b>"买便宜的"和"跟着强弱走"是两套逻辑</b>：前者看估值，后者看资金流向，别混用。'],
   ], `当前命中 <b>${s.n}/3</b> 个信号：${s.txt}。`
     + (s.n>=2 ? ' <b class="up">已达「三选二」，建议重点关注风格切换。</b>'
       : s.n===1 ? ' 仅 1 个信号，尚不足以确认轮动，维持现有配置。'
