@@ -958,8 +958,9 @@ function rotHint(k, m, s){
   if(pos!=null && pos>0.97)       why += '；已贴近布林上轨，强势但别追高';
   else if(pos!=null && pos<0.03)  why += `；${weak}跌破布林下轨，超跌反弹时可能回摆`;
   if(Math.abs(dev)<2)             why += '；刚跨过五年均线，优势很薄';
-  const momA = (dma!=null && dma>0);             // 40日收益差均线仍在 0 上方 = 前一边短期还强
-  if((buyB && momA) || (!buyB && !momA)) why += '；短期动能尚未转向，等确认';
+  // 40日收益差均线在 0 上方 = 前一边短期还强；只有偏离够大（>0.5pt）才算「动能仍在另一边」
+  const momA = (dma!=null && Math.abs(dma)>0.5) ? (dma>0) : null;
+  if(momA!=null && ((buyB && momA) || (!buyB && !momA))) why += '；短期动能仍在另一边，等转向再动';
   // 措辞跟着信号强度走，避免「0/3 无信号」却写成强结论
   const verb = s.n>=2 ? '偏向买' : (s.n===1 ? '略偏' : '暂偏');
   return `<span class="rotbuy">→ ${verb} <em>${buy}</em></span>`
