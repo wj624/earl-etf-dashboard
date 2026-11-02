@@ -946,6 +946,32 @@ const ROT_NAMES = {
   m6c:['沪深300·大盘', '中证1000·小盘'],
   m7 :['国证成长', '国证价值'],
 };
+// 现算①：跌破布林下轨（按「每次跌破」独立计段，避免连续天数重复计数）后 F 日，比值反弹的比例
+function breakStat(m, F){
+  const r=(m.ratio&&m.ratio.cols&&m.ratio.cols[0])||[];
+  const dn=(m.ratio&&m.ratio.cols&&m.ratio.cols[3])||[];
+  const n=r.length; if(n<400) return null;
+  let inside=false, segs=0, up=0;
+  for(let i=0;i<n;i++){
+    const isIn=(r[i]!=null && dn[i]!=null && r[i]<dn[i]);
+    if(isIn && !inside && i+F<n && r[i] && r[i+F]!=null){ segs++; if(r[i+F]>r[i]) up++; }
+    inside=isIn;
+  }
+  return segs>=8 ? {segs, p:Math.round(up/segs*100)} : null;
+}
+// 现算②：每次「刚进入」均线某一侧（独立计段）后 F 日，比值反弹的比例
+// 注意：不能用「处于该状态的所有日子」统计——样本会堆在趋势末端，产生明显的采样偏差
+function enterStat(m, below, F){
+  const r=(m.ma5&&m.ma5.cols&&m.ma5.cols[0])||[];      // 与均线同源，保证对齐
+  const ma=(m.ma5&&m.ma5.cols&&m.ma5.cols[1])||[];
+  const n=r.length; let inside=false, segs=0, up=0;
+  for(let i=0;i<n;i++){
+    const isIn=(r[i]!=null && ma[i]!=null) && (below ? r[i]<ma[i] : r[i]>=ma[i]);
+    if(isIn && !inside && i+F<n && r[i] && r[i+F]!=null){ segs++; if(r[i+F]>r[i]) up++; }
+    inside=isIn;
+  }
+  return segs>=8 ? {segs, p:Math.round(up/segs*100)} : null;
+}
 function rotHint(k, m, s){
   const c=m.cur||{}, nm=ROT_NAMES[k];
   if(!nm || c.ratio==null || c.ma5==null) return null;
@@ -961,10 +987,21 @@ function rotHint(k, m, s){
           + `是${weak}跑输，不是它便宜`;
   const momA = (dma!=null && Math.abs(dma)>0.5) ? (dma>0) : null;
   if(momA!=null && ((buyB && momA) || (!buyB && !momA))) why += '；动能还没转过来';
-  // 第 3 行：一年尺度（跌多的一方大概率补涨）
-  const longTxt = Math.abs(dev)>=3
-    ? `↺ 一年尺度：跑输的一方跌得更多，通常会有补涨 —— ${weak}`
-    : `↺ 一年尺度：比值离均线只差 ${fmt(Math.abs(dev),1)}%，补涨空间不明显`;
+  // 第 3 行：用该指标自己的历史统计回答「之后会不会反转」
+  const inBreak = (c.boll_dn!=null && r<c.boll_dn);
+  const verdict = p => p>=55 ? '多数时候会反弹' : (p<=40 ? '多数继续走弱' : '涨跌接近各半');
+  let longTxt;
+  if(inBreak){
+    const b=breakStat(m,250);
+    longTxt = b
+      ? `↺ 历史 ${b.segs} 次跌破下轨，一年后 ${b.p}% 反弹 —— ${verdict(b.p)}`
+      : '↺ 跌破下轨的历史样本不足';
+  }else{
+    const e=enterStat(m, buyB, 250);
+    longTxt = e
+      ? `↺ 历史 ${e.segs} 次进入${buyB?'均线下方':'均线上方'}，一年后 ${e.p}% 反弹 —— ${verdict(e.p)}`
+      : '↺ 历史样本不足，不给长期方向';
+  }
   return `<span class="rotbuy">→ ${verb} <em>${buy}</em></span>`
        + `<span class="rotwhy">${why}</span>`
        + `<span class="rotlong">${longTxt}</span>`
@@ -1413,7 +1450,11 @@ function rPrism(key, ids, titleEl, idx){
   how(key+'h','使用方法 · 轮动三棱镜（'+m.labels[0]+' ÷ '+m.labels[1]+'）',[
     ['看什么','① 比值是否突破 <b>252 日布林线</b>上下轨；② 比值是否跌破 <b>五年均线</b>；③ <b>40日收益差</b>的 252 日均线是否<b>穿越 0 轴</b>（必须是穿越动作，不是单纯在 0 轴上方/下方）。'],
     ['怎么用','三个信号<b>凑齐两个</b>，就应对一轮轮动<b>高度重视</b>。比值<b>上行</b>＝<b>'+m.labels[0]+'</b>走强，比值<b>下行</b>＝<b>'+m.labels[1]+'</b>走强。'
-      + '<br><b>时间尺度（重要）</b>：本指标判的是 <b>1–2 个季度</b>的相对强弱切换，不是一年以上的配置方向。实算：比值<b>跌破五年均线后 120 个交易日</b>仍继续下跌的样本占 <b>65%–100%</b>（短期跟趋势）；但拉到 <b>250 个交易日（约一年）</b>，「处于均线下方」的样本比值中位数多为 <b>+8% 上下</b>（6③ 为 −2.8%），即前一边补涨（长期均值回归）。<b>短期跟趋势、一年维度反着想，两者不矛盾</b>——别用同一个结论套两个周期。'],
+      + '<br><b>时间尺度（重要）</b>：本指标判的是 <b>1–2 个季度</b>的相对强弱切换，不是一年以上的配置方向。以下统计都按「<b>每次事件</b>」独立计段——不用「处于某状态的所有日子」来算，否则样本会堆在趋势末端，产生明显的采样偏差（会得出"跌久了就会涨"的假象）：'
+      + '<br>① <b>跌破五年均线后 120 个交易日</b>，比值继续下跌的样本占 <b>65%–100%</b>。'
+      + '<br>② <b>跌破布林下轨后一年</b>，比值反弹的比例只有 <b>20%–50%</b>，多数继续走弱。'
+      + '<br>③ <b>刚进入均线某一侧后一年</b>，反弹比例 <b>0%–42%</b>（第 7 张进入下侧 9 次全部继续跌）。'
+      + '<br><b>结论：这套信号是「趋势确认」，不是「反转预警」</b>——触发之后大概率延续，而不是掉头。布林带会随之下移，<b>下轨不是抄底线</b>，「极端」和「底部」是两件事。'],
     ['别误读：比值不是价格', (m.indices ? `两条指数是<b>同基点</b>的（${m.indices.dates[0]} 分别约 ${fmt(m.indices.cols[0][0],0)} / ${fmt(m.indices.cols[1][0],0)}），现在前者 <b>${fmt(m.indices.cols[0][m.indices.cols[0].length-1],0)}</b>、后者 <b>${fmt(m.indices.cols[1][m.indices.cols[1].length-1],0)}</b>。<br>` : '')
       + '比值低＝<b>前一边累计涨得少、近期跑输</b>，<b>不等于它"在打折"</b>——指数点位是累计收益，不是标价。要判断"便宜"，得看 <b>PE/PB</b>（见第 12 张沪深300市盈率），不是看点位。<b>"买便宜的"和"跟着强弱走"是两套逻辑</b>：前者看估值，后者看资金流向，别混用。'],
   ], `当前命中 <b>${s.n}/3</b> 个信号：${s.txt}。`
