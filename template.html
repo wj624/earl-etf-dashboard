@@ -113,6 +113,7 @@ tbody tr:hover{background:#fafbfc}
 .rotbuy{display:block;font-weight:700;color:var(--tx);line-height:1.4}
 .rotbuy em{font-style:normal;color:var(--blue);font-size:14px}
 .rotwhy{display:block;margin-top:1px;line-height:1.5}
+.rotlong{display:block;margin-top:2px;line-height:1.5;color:#a8641b}
 .rotsig{display:block;margin-top:2px;font-size:11px;color:#aab4c4;line-height:1.45}
 
 footer{color:var(--tx3);font-size:12px;text-align:center;padding:26px 0 0;border-top:1px solid var(--line);margin-top:26px}
@@ -962,9 +963,15 @@ function rotHint(k, m, s){
   const momA = (dma!=null && Math.abs(dma)>0.5) ? (dma>0) : null;
   if(momA!=null && ((buyB && momA) || (!buyB && !momA))) why += '；短期动能仍在另一边，等转向再动';
   // 措辞跟着信号强度走，避免「0/3 无信号」却写成强结论
-  const verb = s.n>=2 ? '偏向买' : (s.n===1 ? '略偏' : '暂偏');
+  // 注意：本指标判的是「1–2 个季度」的相对强弱切换，不是一年以上的配置方向
+  const verb = s.n>=2 ? '短期偏向买' : (s.n===1 ? '短期略偏' : '短期暂偏');
+  // 长期那一面必须写出来：比值在均线一侧待久了，一年尺度上多数会均值回归
+  const longTxt = Math.abs(dev)>=3
+    ? `一年尺度：比值${buyB?'低于':'高于'}五年均线 ${fmt(Math.abs(dev),0)}%，历史上多会回归 —— ${weak}有补涨空间`
+    : `一年尺度：比值与五年均线仅差 ${fmt(Math.abs(dev),1)}%，没有明显的回归空间`;
   return `<span class="rotbuy">→ ${verb} <em>${buy}</em></span>`
        + `<span class="rotwhy">${why}</span>`
+       + `<span class="rotlong">↺ ${longTxt}</span>`
        + `<span class="rotsig">信号 ${s.n}/3：${s.txt}</span>`;
 }
 
@@ -1409,7 +1416,8 @@ function rPrism(key, ids, titleEl, idx){
 
   how(key+'h','使用方法 · 轮动三棱镜（'+m.labels[0]+' ÷ '+m.labels[1]+'）',[
     ['看什么','① 比值是否突破 <b>252 日布林线</b>上下轨；② 比值是否跌破 <b>五年均线</b>；③ <b>40日收益差</b>的 252 日均线是否<b>穿越 0 轴</b>（必须是穿越动作，不是单纯在 0 轴上方/下方）。'],
-    ['怎么用','三个信号<b>凑齐两个</b>，就应对一轮轮动<b>高度重视</b>。比值<b>上行</b>＝<b>'+m.labels[0]+'</b>走强，比值<b>下行</b>＝<b>'+m.labels[1]+'</b>走强。'],
+    ['怎么用','三个信号<b>凑齐两个</b>，就应对一轮轮动<b>高度重视</b>。比值<b>上行</b>＝<b>'+m.labels[0]+'</b>走强，比值<b>下行</b>＝<b>'+m.labels[1]+'</b>走强。'
+      + '<br><b>时间尺度（重要）</b>：本指标判的是 <b>1–2 个季度</b>的相对强弱切换，不是一年以上的配置方向。实算：比值<b>跌破五年均线后 120 个交易日</b>仍继续下跌的样本占 <b>65%–100%</b>（短期跟趋势）；但拉到 <b>250 个交易日（约一年）</b>，「处于均线下方」的样本比值中位数多为 <b>+8% 上下</b>（6③ 为 −2.8%），即前一边补涨（长期均值回归）。<b>短期跟趋势、一年维度反着想，两者不矛盾</b>——别用同一个结论套两个周期。'],
   ], `当前命中 <b>${s.n}/3</b> 个信号：${s.txt}。`
     + (s.n>=2 ? ' <b class="up">已达「三选二」，建议重点关注风格切换。</b>'
       : s.n===1 ? ' 仅 1 个信号，尚不足以确认轮动，维持现有配置。'
