@@ -40,7 +40,11 @@ nav a.on{color:var(--blue);border-bottom-color:var(--blue);font-weight:600}
 
 /* cards */
 .card{background:var(--card);border:1px solid var(--line);border-radius:12px;
-  padding:20px 22px;margin-bottom:20px}
+  padding:20px 22px;margin-bottom:20px;
+  scroll-margin-top:58px}   /* 锚点跳转时给吸顶导航留出高度，标题不被遮住 */
+/* 从「信号汇总」跳过来的目标卡片，闪一下蓝框，让人知道跳到了哪 */
+@keyframes cardflash{0%{box-shadow:0 0 0 3px rgba(37,99,235,.45)}65%{box-shadow:0 0 0 3px rgba(37,99,235,.22)}100%{box-shadow:0 0 0 3px rgba(37,99,235,0)}}
+.card.flash{animation:cardflash 1.5s ease-out}
 .card h2{font-size:16.5px;font-weight:650;display:flex;align-items:center;gap:9px;flex-wrap:wrap}
 .tag{font-size:11px;font-weight:600;padding:2px 8px;border-radius:5px;background:var(--bluebg);color:var(--blue)}
 .tag.warn{background:var(--orgbg);color:var(--org)}
@@ -98,6 +102,13 @@ th,td{padding:9px 10px;text-align:left;border-bottom:1px solid var(--line2)}
 th{color:var(--tx3);font-size:11.5px;font-weight:600;text-transform:uppercase;letter-spacing:.4px}
 td:first-child{font-weight:500}
 tbody tr:hover{background:#fafbfc}
+/* 信号汇总：整行可点，跳到对应指标图表 */
+#sumBody tr.jrow{cursor:pointer}
+#sumBody tr.jrow:hover{background:#eef4ff}
+#sumBody tr.jrow:hover td:first-child{color:var(--blue)}
+#sumBody tr.jrow td:first-child::after{content:"↗";font-size:11px;color:#c2cad6;margin-left:6px}
+#sumBody tr.jrow:hover td:first-child::after{color:var(--blue)}
+#sumBody tr.jrow:focus-visible{outline:2px solid var(--blue);outline-offset:-2px}
 
 footer{color:var(--tx3);font-size:12px;text-align:center;padding:26px 0 0;border-top:1px solid var(--line);margin-top:26px}
 .note{background:var(--bluebg);border:1px solid #dbeafe;border-radius:8px;padding:11px 14px;
@@ -150,7 +161,7 @@ footer{color:var(--tx3);font-size:12px;text-align:center;padding:26px 0 0;border
 
 <div class="card" id="sum">
   <h2>信号汇总 <span class="tag">每日快照</span></h2>
-  <div class="lead">按编号 <b>1 → 13</b> 一眼看完全部指标当前的读数与方向。信号仅为机械读数，不构成投资建议。</div>
+  <div class="lead">按编号 <b>1 → 13</b> 一眼看完全部指标当前的读数与方向。<b>点任意一行可跳到该指标详情图</b>（鼠标移上去会变色，跳过去对应卡片会闪一下蓝框）。信号仅为机械读数，不构成投资建议。</div>
   <div id="sumBody"></div>
 </div>
 
@@ -792,77 +803,101 @@ function has(k, kpiId, chartIds){
 // ---- 汇总表 ----
 function buildSummary(){
   const rows=[];
-  const add=(name,val,signal,level,note)=>rows.push({name,val,signal,level,note});
+  // tgt = 该行对应的卡片锚点，点击整行跳到那里
+  const add=(name,val,signal,level,note,tgt)=>rows.push({name,val,signal,level,note,tgt});
 
   // 按页面编号 1 → 13 排序，与下方卡片一一对应
   if(M.m1){ const d=M.m1.cur.dev, p10=M.m1.cur.pct10;
     add('1 · 五年之锚（中证全指000985）', pct(d),
       d>10?'偏热 / 暂停定投':(d<-5?'偏低 / 可加仓':'中性'), d>10?'hot':(d<-5?'cold':'mid'),
-      `偏离度 ${pct(d)}（阈值 +10% / −5%，已按口径校准），10年分位 ${fmt(p10,0)}%`); }
+      `偏离度 ${pct(d)}（阈值 +10% / −5%，已按口径校准），10年分位 ${fmt(p10,0)}%`, '#m1'); }
   if(M.m2){ const p=pctile(M.m2.data.cols[0],M.m2.cur.ey_cn);
     add('2 · 股债性价比（中国视角）', fmt(M.m2.cur.ey_cn)+'%',
       p>70?'股票性价比高':(p<30?'股票性价比低':'中性'), p>70?'cold':(p<30?'hot':'mid'),
-      `历史分位 ${fmt(p,0)}%`); }
+      `历史分位 ${fmt(p,0)}%`, '#m2'); }
   if(M.m2){ add('2 · 股债性价比（美元视角）', fmt(M.m2.cur.ey_us)+'%',
       M.m2.cur.ey_us>0?'外资视角仍有吸引力':'外资视角缺乏吸引力',
-      M.m2.cur.ey_us>0?'cold':'hot', `美债10Y ${fmt(M.m2.cur.us10y)}%`); }
+      M.m2.cur.ey_us>0?'cold':'hot', `美债10Y ${fmt(M.m2.cur.us10y)}%`, '#m2'); }
   if(M.m3){ const d=M.m3.cur.dev;
     add('3 · 韭圈儿神奇指标', pct(d), d<0?'两线交汇 / 底部区':(d>60?'远离 / 顶部高危':'中性'),
-      d<0?'cold':(d>60?'hot':'mid'), '沪深300全收益 vs 偏债混合(885003历史+807330续接)累计涨幅偏离'); }
+      d<0?'cold':(d>60?'hot':'mid'), '沪深300全收益 vs 偏债混合(885003历史+807330续接)累计涨幅偏离', '#m3'); }
   if(M.m3b){ const _a=M.m3b.data.cols[0], _b=M.m3b.data.cols[1], _n=_a.length-1;
     const dv=_a[_n]/_b[_n]*100-100;
     add('3b · 韭圈儿指标(基金口径)', pct(dv), dv<0?'跑输偏债 / 偏冷':(dv>60?'远离 / 顶部高危':'中性'),
-      dv<0?'cold':(dv>60?'hot':'mid'), '110020 实际净值 vs 同一偏债腿；起点 2009-08 不同，绝对值不可与 3 直接比'); }
+      dv<0?'cold':(dv>60?'hot':'mid'), '110020 实际净值 vs 同一偏债腿；起点 2009-08 不同，绝对值不可与 3 直接比', '#m3b'); }
   if(M.m4){ const r=M.m4.cur.r3;
     add('4 · 偏股基金3年滚动年化', pct(r),
       r>30?'泡沫区':(r<-10?'底部区':'中性'), r>30?'hot':(r<-10?'cold':'mid'),
-      '阈值 +30% / −10%'); }
+      '阈值 +30% / −10%', '#m4'); }
   if(M.m5){ const r=M.m5.cur.ratio, g=M.m5.cur.gap;
     add('5 · 偏股 vs 一级债基(估算顶)', fmt(r,2),
       r>=1.03?'已上穿估算顶线':(r>=0.90?'逼近估算顶线':(r>=0.72?'中性':'离估算顶较远')),
       r>=1.03?'hot':'mid',
-      g>=0?`偏股距红线(债基累计收益)还需 +${fmt(g,1)}% 即触及估算顶区`:`偏股已高出红线 ${fmt(-g,1)}%，顶部警戒`); }
+      g>=0?`偏股距红线(债基累计收益)还需 +${fmt(g,1)}% 即触及估算顶区`:`偏股已高出红线 ${fmt(-g,1)}%，顶部警戒`, '#m5'); }
   const PRISM_NO = {m6a:'6①', m6b:'6②', m6c:'6③', m7:'7'};
   ['m6a','m6b','m6c','m7'].forEach(k=>{ const m=M[k]; if(!m) return;
     const s=countSig(m);
     add(`${PRISM_NO[k]} · 轮动三棱镜 · ${m.labels[0]} ÷ ${m.labels[1]}`, `${s.n}/3`,
       s.n>=2?'⚠ 轮动信号触发':(s.n===1?'有个别信号':'无信号'),
-      s.n>=2?'hot':(s.n===1?'mid':'mid'), s.txt); });
+      s.n>=2?'hot':(s.n===1?'mid':'mid'), s.txt, k.indexOf('m6')===0?'#m6':'#m7'); });
   if(M.m8){ const p=pctile(M.m8.data.cols[0],M.m8.cur.dy);
     add('8 · 中证红利股息率', fmt(M.m8.cur.dy)+'%',
       p>70?'股息率高 / 安全边际厚':(p<30?'股息率被压缩':'中性'), p>70?'cold':(p<30?'hot':'mid'),
-      `历史分位 ${fmt(p,0)}%，减国债后 ${fmt(M.m8.cur.spread)}%`); }
+      `历史分位 ${fmt(p,0)}%，减国债后 ${fmt(M.m8.cur.spread)}%`, '#m8'); }
   if(M.m9){ const v=M.m9.cur.d40;
     add('9 · 红利40日收益差（vs A股）', pct(v,1),
       v>8?'短期透支 / 勿追高':(v<-4?'回落至低位 / 关注买点':'中性'),
-      v>8?'hot':(v<-4?'cold':'mid'), '过高勿追，回落至零轴下方再考虑'); }
+      v>8?'hot':(v<-4?'cold':'mid'), '过高勿追，回落至零轴下方再考虑', '#m9'); }
   if(M.m10){ const z=M.m10.cur.z;
     add('10 · 红利回归通道 Z 值', fmt(z,2),
       z<-1?'接近下轨 / 买点参考':(z>1.2?'贴上轨 / 短期透支':'通道内'),
-      z<-1?'cold':(z>1.2?'hot':'mid'), `隐含年化 ${fmt(M.m10.cur.ann)}%`); }
+      z<-1?'cold':(z>1.2?'hot':'mid'), `隐含年化 ${fmt(M.m10.cur.ann)}%`, '#m10'); }
   if(M.m11){ const v=M.m11.cur.d40;
     add('11 · 红利AH 40日收益差', pct(v,1),
       v>8?'偏向港股高股息':(v<-4?'偏向A股红利':'中性'), v>8?'hot':(v<-4?'cold':'mid'),
-      '过高多买港股，过低多买A股'); }
+      '过高多买港股，过低多买A股', '#m11'); }
   if(M.m12){ const p=M.m12.cur.pr, pe=M.m12.cur.pe;
     add('12 · 沪深300 市盈率', fmt(pe,2)+' 倍', `历史分位 ${fmt(M.m12.cur.pe_pct,0)}%`,
-      M.m12.cur.pe_pct>70?'hot':(M.m12.cur.pe_pct<30?'cold':'mid'), 'PE TTM（乐咕月频）');
+      M.m12.cur.pe_pct>70?'hot':(M.m12.cur.pe_pct<30?'cold':'mid'), 'PE TTM（乐咕月频）', '#m12');
     add('12 · 沪深300 市赚率', fmt(p,2)+' PR', p>1.2?'考虑ROE后偏高估':(p<0.8?'考虑ROE后偏低估':'合理估值区间'),
-      p>1.2?'hot':(p<0.8?'cold':'mid'), 'PR = PE ÷ ROE，1PR 为合理估值'); }
+      p>1.2?'hot':(p<0.8?'cold':'mid'), 'PR = PE ÷ ROE，1PR 为合理估值', '#m12'); }
   if(M.m13){ const r=M.m13.cur.ratio;
     add('13 · 交易集中度(前5%占比)', fmt(r,2)+'%',
       r>=45?'拥挤/警戒':(r>=38?'偏热':'中性'), r>=45?'hot':(r>=38?'mid':'mid'),
-      '突破45%历史多对应顶部/风格切换/抱团瓦解'); }
+      '突破45%历史多对应顶部/风格切换/抱团瓦解', '#m13'); }
   if(M.m14){ const c=M.m14.cur;
     add('14 · 融资盘平均担保比例', fmt(c.ratio,2)+'%',
       c.ratio<227?'⚠ 已跌破227%强平线':(c.gap227<10?'安全垫极薄/警戒':(c.gap227<20?'安全垫偏薄':'慢性失血区')),
       c.ratio<227?'hot':(c.gap227<10?'hot':'mid'),
-      `距 227% ${c.gap227>0?'+':''}${fmt(c.gap227,1)}pt；2015 起破线 ${c.below_days15} 天/${c.below_rounds15} 轮，最近 ${c.last_below}`); }
+      `距 227% ${c.gap227>0?'+':''}${fmt(c.gap227,1)}pt；2015 起破线 ${c.below_days15} 天/${c.below_rounds15} 轮，最近 ${c.last_below}`, '#m14'); }
 
   let html = '<table><thead><tr><th>指标</th><th>当前值</th><th>读数</th><th>备注</th></tr></thead><tbody>'
-    + rows.map(r=>`<tr><td>${r.name}</td><td><b>${r.val}</b></td>
+    + rows.map(r=>`<tr${r.tgt?` class="jrow" data-t="${r.tgt}" tabindex="0" title="点击跳到该指标图表"`:''}><td>${r.name}</td><td><b>${r.val}</b></td>
         <td>${sig(r.level,r.signal)}</td><td style="color:#5b6472">${r.note}</td></tr>`).join('');
   $('sumBody').innerHTML = html + '</tbody></table>';
+
+  // 整行可点：鼠标点击 / 键盘回车 → 跳到对应指标卡片
+  $('sumBody').querySelectorAll('tr.jrow').forEach(tr=>{
+    const go=()=>jumpToCard(tr.dataset.t);
+    tr.addEventListener('click', go);
+    tr.addEventListener('keydown', e=>{
+      if(e.key==='Enter' || e.key===' '){ e.preventDefault(); go(); }
+    });
+  });
+}
+
+// 跳到某张卡片：平滑滚动 + 短暂蓝框高亮 + 地址栏 #hash（可分享、可后退）
+function jumpToCard(hash){
+  const el = hash && document.querySelector(hash);
+  if(!el) return;
+  try{ history.replaceState(null, '', hash); }catch(e){}
+  el.scrollIntoView({behavior:'smooth', block:'start'});
+  el.classList.remove('flash');
+  void el.offsetWidth;                 // 强制重排，保证重复点击也能再闪一次
+  el.classList.add('flash');
+  // 动画结束再撤掉 class；3s 兜底（万一标签页在后台动画不触发）
+  el.addEventListener('animationend', ()=>el.classList.remove('flash'), {once:true});
+  setTimeout(()=>el.classList.remove('flash'), 3000);
 }
 
 // 信号③必须是「穿越 0 轴」这个动作（符号翻转），而不是「当前非 0」。
