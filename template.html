@@ -842,7 +842,7 @@ function buildSummary(){
       g>=0?`偏股距红线(债基累计收益)还需 +${fmt(g,1)}% 即触及估算顶区`:`偏股已高出红线 ${fmt(-g,1)}%，顶部警戒`, '#m5'); }
   const PRISM_NO = {m6a:'6①', m6b:'6②', m6c:'6③', m7:'7'};
   ['m6a','m6b','m6c','m7'].forEach(k=>{ const m=M[k]; if(!m) return;
-    const s=countSig(m);
+    const s=countSig(m, k);
     add(`${PRISM_NO[k]} · 轮动三棱镜 · ${m.labels[0]} ÷ ${m.labels[1]}`, `${s.n}/3`,
       s.n>=2?'⚠ 异常信号偏多':(s.n===1?'有个别异常':'无异常'),
       s.n>=2?'hot':(s.n===1?'mid':'mid'), rotHint(k,m,s) || s.txt, k.indexOf('m6')===0?'#m6':'#m7'); });
@@ -920,15 +920,19 @@ function d40Pct(m, win=1250){
   return Math.round(arr.filter(x=>x<=v).length/arr.length*100);
 }
 
-function countSig(m){
+function countSig(m, k){
   const c=m.cur, r=c.ratio, up=c.boll_up, dn=c.boll_dn, ma5=c.ma5;
   let n=0, t=[];
   if(r!==null && up!==null && r>up){ n++; t.push('比值突破布林上轨'); }
   else if(r!==null && dn!==null && r<dn){ n++; t.push('比值跌破布林下轨'); }
   if(r!==null && ma5!==null && r<ma5){ n++; t.push('比值跌破五年均线'); }
   const p=d40Pct(m);
-  if(p!==null && p>=90){ n++; t.push(`40日涨速过热（分位${p}%）`); }
-  else if(p!==null && p<=10){ n++; t.push(`40日涨速过冷（分位${p===0?'<1':p}%）`); }
+  // 40日收益差＝前一边 − 后一边，所以「过冷/过热」说的都是**前一边**的短期涨速，必须带主语
+  const nmA = (k && ROT_NAMES[k]) ? ROT_NAMES[k][0]
+            : ((m.labels && m.labels[0]) || '前一边').replace(/\(.*?\)/g,'');
+  const pShow = (p===0 ? '<1' : p);
+  if(p!==null && p>=90){ n++; t.push(`${nmA}40日涨速过热（分位${pShow}%）`); }
+  else if(p!==null && p<=10){ n++; t.push(`${nmA}40日涨速过冷（分位${pShow}%）`); }
   return {n, txt:t.length?t.join('、'):'三信号均未触发'};
 }
 
@@ -1433,7 +1437,7 @@ function rM5b(){
 // ---- 三棱镜 ----
 function rPrism(key, ids, titleEl, idx){
   const m=M[key]; if(!m) return;
-  const c=m.cur, s=countSig(m);
+  const c=m.cur, s=countSig(m, key);
   const badge = s.n>=2 ? sig('hot',`⚠ ${s.n}/3 异常信号（不指示方向）`) : (s.n===1?sig('mid','1/3 异常') : sig('mid','无异常'));
   $(titleEl).innerHTML = `<div class="sub">${idx?idx+' ':''}${m.labels[0]} ÷ ${m.labels[1]}</div><div class="kpis">
     <div class="kpi"><div class="l">${m.labels[0]} ÷ ${m.labels[1]}</div><div class="v blue">${fmt(c.ratio,4)}</div><div class="s">${c.date}</div></div>
@@ -1445,7 +1449,8 @@ function rPrism(key, ids, titleEl, idx){
 
   how(key+'h','使用方法 · 轮动三棱镜（'+m.labels[0]+' ÷ '+m.labels[1]+'）',[
     ['看什么','① 比值是否突破 <b>252 日布林线</b>上下轨（位置极端）；② 比值是否跌破 <b>五年均线</b>（中期水位）；③ <b>40 日收益差的滚动分位</b>是否进极值区（≥90% 过热 / ≤10% 过冷）。'
-      + '<br><b>①② 测「位置」，③ 测「涨速」</b>——位置会延续、涨速会回归，所以 ③ 只用来提示「短期透支/超跌」，<b>不改变方向</b>。'],
+      + '<br><b>③ 说的永远是「前一边」</b>：40 日收益差 ＝ 前一边 40 日涨幅 − 后一边 40 日涨幅，所以「过冷」＝<b>前一边短期大幅跑输</b>——它是<b>相对概念</b>，不是"它跌了多少个百分点"，也不等于它会绝对上涨。'
+      + '<br>①② 测「位置」，③ 测「涨速」——位置会延续、涨速会回归，所以 ③ 只用来提示「短期透支/超跌」，<b>不改变方向</b>。'],
     ['怎么用','三个信号<b>凑齐两个</b>，说明这一对风格的相对关系已明显偏离常态，值得重视。<b>方向只看 ②</b>：比值在五年均线上方＝<b>'+m.labels[0]+'</b>相对占优，下方＝<b>'+m.labels[1]+'</b>相对占优。<br><b>①③ 只说明「有多极端」，本身不指示方向</b>：① 是位置极端、③ 是涨速极端（涨速用反转读法：过热别追、过冷易反弹，与第 9 张红利 40 日收益差同口径）。'
       + '<br><b>时间尺度（重要）</b>：本指标判的是 <b>1–2 个季度</b>的相对强弱切换，不是一年以上的配置方向。以下统计都按「<b>每次事件</b>」独立计段——不用「处于某状态的所有日子」来算，否则样本会堆在趋势末端，产生明显的采样偏差（会得出"跌久了就会涨"的假象）：'
       + '<br>① <b>跌破五年均线后 120 个交易日</b>，比值继续下跌的样本占 <b>65%–100%</b>。'
