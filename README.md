@@ -18,6 +18,7 @@
 | 用途 | 地址 |
 |---|---|
 | **看板主页**（人看） | <https://wj624.github.io/earl-etf-dashboard/> |
+| **看板中心（聚合入口）** | <https://wj-dashboards.pages.dev/> |
 | 五年之锚 v2 独立页 | <https://wj624.github.io/earl-etf-dashboard/anchor_v2.html> |
 | **给 AI 的文本摘要**（推荐发这个） | <https://wj624.github.io/earl-etf-dashboard/llms.txt> |
 | 同一份摘要的 Markdown 版 | <https://wj624.github.io/earl-etf-dashboard/snapshot.md> |
