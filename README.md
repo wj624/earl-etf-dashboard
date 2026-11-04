@@ -864,3 +864,98 @@ FRED 同样会被封）。所以密钥一律走 `setGeminiKey` / `setFredKey` �
 | `TRIGGER_HOUR` / `TRIGGER_MINUTE` | `19` / `15` | 发信时间（北京） |
 | `WEEKDAYS_ONLY` | `false` | `true` = 只工作日发 |
 | `SKIP_IF_UNCHANGED` | `true` | `true` = 数据日没变就跳过 |
+
+---
+
+# 第十三部分 · 给 AI 的维护提示词
+
+> 第十一部分「维护须知」是给**人**看的 11 条经验；本篇是给 **AI** 的可执行入口。
+> 把下面「提示词」整段复制给 AI，它就能在不了解背景的情况下接手，并按同样的纪律改代码。
+
+## 13.1 仓库速览
+
+| 项 | 内容 |
+| --- | --- |
+| 用途 | EarlETF 图表周刊 · 20 个指标看板，产出**单文件自包含 HTML** |
+| 抓数 + 指标计算 | `fetch_data.py`（约 115 KB，20 个指标的取数与计算全在这里） |
+| 官方利率源 | `official.py`（中债登国债收益率曲线、美国财政部国债收益率） |
+| 打洞守护 | `backfill.py`（中证官网有 WAF 限流，用它分段补历史空洞） |
+| 渲染 | `template.html`（页面源码，**要改页面只改这里**）+ `build.py` → `index.html` / `anchor_v2.html` |
+| AI 摘要 | `make_llm_summary.py` → `llms.txt` / `snapshot.md` / `latest.json` |
+| 邮件 | `gas-earl-daily.gs`（Google Apps Script，每天 19:15 读摘要发信） |
+| 调度 | `.github/workflows/update.yml`，`cron: '30 10 * * *'`（UTC）= 北京 18:30 |
+| 依赖 | `requests numpy pandas akshare`（akshare 仅供 M13/M14，见 13.3） |
+| 密钥 | **Actions 侧不需要任何 Secret**（只有内置 token）；邮件脚本的 Gemini/FRED key 存在 Apps Script 里 |
+
+## 13.2 数据与缓存
+
+- **`cache/` 是命根子**：2005 年以来各指数 CSV 全部纳入 git 跟踪，随每次运行提交。
+  中证官网有 WAF，重抓一次要很久。**不要删，也不要改回 `actions/cache`**
+  （2026-11-01 已移除：actions/cache 的 key 不可变，永远恢复同一份旧快照，还会覆盖仓库里更新的同名文件）。
+- **Wind 缓存只当不可变历史段**：`cache/wind885003.csv`、`cache/wind885006.csv` 的数据永不再变，
+  之后的日期由云端源续接（申万 `807330`、中证债基 `H11023`）。删了会退化到 25/75 合成口径，**历史曲线会被改写**。
+- **`TZ: Asia/Shanghai` 必须保留**：`data.json` 的 `updated`、`version.txt`、页面「打包于」都取自它。
+  runner 默认 UTC，去掉时区会整体早 8 小时。
+
+## 13.3 现成的改进机会（下次动代码时可以顺手做）
+
+`M13 两市成交额` 与 `M14 两融账户` 目前仍靠 akshare，而自建的
+[a-stock-api](https://github.com/wj624/a-stock-api) 已经提供了完全对应的两个端点：
+
+| 指标 | 现在的 akshare 调用 | 可换成 |
+| --- | --- | --- |
+| M13 两市成交额 | akshare 兜底 | `GET /api/market-turnover?symbols=sh000001,sz399001`（腾讯源，返回 `total_amount` 单位元） |
+| M14 两融账户 | akshare | `GET /api/margin-account?start=YYYY-MM-DD`（东财 datacenter） |
+
+换掉之后 `requirements.txt` 与 workflow 里的 `akshare` 可以整条删掉（连带 pandas 之外的依赖也变轻）。
+**换源必须遵守第 11 部分第 7 条：指标水平值若变化，判定阈值要重设，且四处一起改。**
+
+## 13.4 提示词（复制这段给 AI）
+
+```text
+你在维护 GitHub 仓库 wj624/earl-etf-dashboard —— EarlETF 图表周刊的 20 指标看板。
+先完整读 README 的「第十一部分 · 维护须知」（11 条经验）与「第十三部分 · 给 AI 的维护提示词」。
+
+【流水线】
+fetch_data.py（抓数+算 20 个指标）→ data.json → build.py（template.html + echarts + data）→ index.html
++ anchor_v2.html（由 build.py 的 rebuild_anchor() 每次重建）
+make_llm_summary.py → llms.txt / snapshot.md / latest.json（AI 摘要）
+.github/workflows/update.yml 每天 UTC 10:30（北京 18:30）跑一次并提交产物。
+
+【数据源】
+- 中证指数官网（主）：930xxx / H11xxx / 000xxx 日线，有 WAF 限流，脚本内置退避；backfill.py 专治历史空洞。
+- 国证指数网：399370 / 399371。
+- 腾讯行情：沪深/深证系指数**兜底**，仅官方源失败时启用。
+- 乐咕乐股：沪深300 / 上证红利 的 PE、PB（月频，唯一仍在用的第三方长周期源）。
+- 中债登 + 美国财政部（official.py）：中/美 10 年期国债收益率。
+- 申万 807330、中证 H11023：M3/M5 的云端续接腿。
+- akshare：目前仅 M13（两市成交额兜底）与 M14（两融）在用，属可替换项（见 13.3）。
+
+【铁律（违反会静默出错，不报错）】
+1. cache/ 不要删、不要改回 actions/cache；wind885003.csv / wind885006.csv 尤其不能删。
+2. 改页面只改 template.html，改完必须跑 python build.py；直接改 index.html 会被下次构建覆盖。
+3. 提交内容必须包含 version.txt，否则前端版本探针卡在旧版本。
+4. 换数据源 = 四处一起改：fetch_data.py（取数）、template.html（卡片标题/图例/说明里的硬编码标的名）、
+   make_llm_summary.py（META 的判读口径 + reading()）、README.md。
+   只改 fetch_data.py 会得到「新数据配旧口径」的页面。
+5. 换源若改变了指标水平值（不只是走势形态），必须重设判定阈值，且阈值散在四处：
+   template.html 的 rM1()/rM1b() 与 buildSummary()、build.py 的 rebuild_anchor() 三档区间、
+   make_llm_summary.py 的 META、README。漏做不会报错，但「高位/低位」的灯会一直错着亮。
+6. 新增指标要同步 make_llm_summary.py 的 META 和 reading()，否则摘要里显示「（读取失败：…）」。
+7. 摘要文件（llms.txt / snapshot.md / latest.json）是构建产物，不要手改；
+   调整内容请改 make_llm_summary.py，先 python make_llm_summary.py --check 预览。
+8. TZ=Asia/Shanghai 必须保留。
+
+【验证】
+- 本地全跑：pip install -r requirements.txt && TZ=Asia/Shanghai python fetch_data.py && python build.py
+  && python make_llm_summary.py
+- 打开 index.html 自检：顶部数据日是否是今天、有没有「数据补充中」空白卡（有=模板与产物不同步，重跑 build.py）、
+  M1/M1b 的阈值灯与当前偏离率是否自洽。
+- 云端：Actions 手动跑「每日自动更新看板」，确认 cache/csi*.csv 数量 ≥15（走 --quick 增量），
+  且提交里含 index.html / data.json / version.txt / cache/。
+- 注意：沙盒/部分 CI 访问不到 *.workers.dev；要验证 a-stock-api 端点，见
+  https://github.com/wj624/a-stock-api 的 README §9（直接读 KV 缓存值核对数值）。
+
+【收尾】改了口径/数据源/调度，同步更新 README 第六部分（数据源）、第七部分（口径替代说明）、第八部分（自动更新）。
+```
+
