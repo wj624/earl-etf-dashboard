@@ -1,0 +1,76 @@
+# 每月 1 号把 main 压成「单个无父快照」，让仓库体积恒定有界。
+#
+# 做法：用 Git Data API 建一个 tree 与当前 HEAD 完全相同、但 parents=[] 的 root commit，
+# 再把 refs/heads/main 指过去。工作树内容一个字节都不改，只是把提交父链剪断；
+# 旧 commit 变成不可达对象，由 GitHub 后台 repack 回收。
+# - 不走 git push --force ⇒ 不触发任何 on: push 工作流
+# - 不改任何文件 ⇒ 定时任务 checkout 后行为完全不变
+# - 旧 HEAD 打进日志与 artifact ⇒ 出问题时可一条命令回滚
+#
+# UTC 03:00 = 北京 11:00，刻意避开全部日报时段（最近的是 22:30 UTC 与 10:30 UTC）。
+name: Monthly snapshot (fixed-size repo)
+
+on:
+  schedule:
+    - cron: "0 3 1 * *"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: monthly-snapshot-${{ github.repository }}
+  cancel-in-progress: false
+
+jobs:
+  compact:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Guard - 先确认工作树完整，否则绝不剪断历史
+        id: guard
+        env:
+          KEY_FILE: "fetch_data.py"
+        run: |
+          set -euo pipefail
+          test -f README.md || { echo "::error::README.md 缺失，放弃压缩"; exit 1; }
+          test -f "$KEY_FILE" || { echo "::error::$KEY_FILE 缺失，放弃压缩"; exit 1; }
+          N=$(git ls-files | wc -l)
+          test "$N" -ge 8 || { echo "::error::跟踪文件仅 $N 个，疑似不完整，放弃压缩"; exit 1; }
+          OLD=$(git rev-parse HEAD)
+          TREE=$(git rev-parse 'HEAD^{tree}')
+          echo "old_head=$OLD" >> "$GITHUB_OUTPUT"
+          echo "tree=$TREE" >> "$GITHUB_OUTPUT"
+          echo "::notice::压缩前 HEAD=$OLD，跟踪文件 $N 个，tree=$TREE"
+
+      - name: Cut parent chain via Git Data API
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          OLD_HEAD: ${{ steps.guard.outputs.old_head }}
+          TREE: ${{ steps.guard.outputs.tree }}
+        run: |
+          set -euo pipefail
+          REPO="${{ github.repository }}"
+          BODY=$(printf '{"message":"chore: monthly snapshot - keep current tree, drop commit history","tree":"%s","parents":[]}' "$TREE")
+          NEW=$(printf '%s' "$BODY" | gh api -X POST "repos/$REPO/git/commits" --input - --jq '.sha')
+          test -n "$NEW" || { echo "::error::建立 root commit 失败"; exit 1; }
+          gh api -X PATCH "repos/$REPO/git/refs/heads/main" -f sha="$NEW" -F force=true > /dev/null
+          ACTUAL=$(gh api "repos/$REPO/git/refs/heads/main" --jq '.object.sha')
+          test "$ACTUAL" = "$NEW" || { echo "::error::ref 未指向新 commit"; exit 1; }
+          P=$(gh api "repos/$REPO/git/commits/$NEW" --jq '.parents | length')
+          test "$P" = "0" || { echo "::error::新 commit 不是 root commit"; exit 1; }
+          echo "::notice::完成：main 现在是无父快照 $NEW，工作树内容一字未改"
+          echo "::notice::回滚命令（对象短期内仍可达）：git push --force origin $OLD_HEAD:main"
+
+      - name: Record rollback SHA
+        if: always()
+        run: |
+          echo "${{ steps.guard.outputs.old_head }}" > previous_main_head.txt
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: monthly-snapshot-rollback-sha
+          path: previous_main_head.txt
+          retention-days: 90
