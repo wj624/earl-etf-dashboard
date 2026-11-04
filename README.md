@@ -648,7 +648,7 @@
 | 沪深300 / 上证红利 PE、PB | 乐咕乐股 | 月频，2005 年至今（**唯一仍在用的第三方长周期源**） |
 | 中证红利日频股息率 | 中证官网静态 XLS | 每次抓最近约 20 个交易日，逐日累积 |
 | 中 / 美 10 年期国债收益率 | 中债登 + 美国财政部 | 官方 XLSX/CSV 直取 |
-| 两融担保比例 | AkShare | 日频 |
+| 两融担保比例 | 东财 datacenter（经自建 `a-stock-api`） | 日频，2012-09-27 起；`/api/margin-account` 一次取全历史，端点故障时回退 AkShare 同表 |
 | 中证全指(000985) | 中证官网 / Tencent | 日频，**云端每日刷新**（M1 现用，替代万得全A 881001.WI） |
 | Wind 专有指数（885003 / 885006） | Wind 官方 API | **仅作不可变历史段**（截至 2026-10-22），末日之后由申万 807330 / 中证债基 H11023 云端续接 |
 | 申万宏源基金指数(807330) | 申万官网 API | 日频，**云端每日刷新**（M3/M3b 偏债腿续接） |
@@ -884,7 +884,7 @@ FRED 同样会被封）。所以密钥一律走 `setGeminiKey` / `setFredKey` �
 | AI 摘要 | `make_llm_summary.py` → `llms.txt` / `snapshot.md` / `latest.json` |
 | 邮件 | `gas-earl-daily.gs`（Google Apps Script，每天 19:15 读摘要发信） |
 | 调度 | `.github/workflows/update.yml`，`cron: '30 10 * * *'`（UTC）= 北京 18:30 |
-| 依赖 | `requests numpy pandas akshare`（akshare 仅供 M13/M14，见 13.3） |
+| 依赖 | `requests numpy pandas akshare`（akshare 尚供 M3 乐咕 / 国债 / M4 净值 / M13 快照四处兜底，见 13.3） |
 | 密钥 | **Actions 侧不需要任何 Secret**（只有内置 token）；邮件脚本的 Gemini/FRED key 存在 Apps Script 里 |
 
 ## 13.2 数据与缓存
@@ -897,17 +897,43 @@ FRED 同样会被封）。所以密钥一律走 `setGeminiKey` / `setFredKey` �
 - **`TZ: Asia/Shanghai` 必须保留**：`data.json` 的 `updated`、`version.txt`、页面「打包于」都取自它。
   runner 默认 UTC，去掉时区会整体早 8 小时。
 
-## 13.3 现成的改进机会（下次动代码时可以顺手做）
+## 13.3 自建 a-stock-api 的接入现状
 
-`M13 两市成交额` 与 `M14 两融账户` 目前仍靠 akshare，而自建的
-[a-stock-api](https://github.com/wj624/a-stock-api) 已经提供了完全对应的两个端点：
+[a-stock-api](https://github.com/wj624/a-stock-api) 是与本仓库配套的 Worker 数据层，
+把「第三方接口 + 解析」收到一处，端点清单与字段口径见其 README §9。
 
-| 指标 | 现在的 akshare 调用 | 可换成 |
+### 已接入
+
+| 指标 | 现用端点 | 说明 |
 | --- | --- | --- |
-| M13 两市成交额 | akshare 兜底 | `GET /api/market-turnover?symbols=sh000001,sz399001`（腾讯源，返回 `total_amount` 单位元） |
-| M14 两融账户 | akshare | `GET /api/margin-account?start=YYYY-MM-DD`（东财 datacenter） |
+| M14 两融担保比例 | `GET /api/margin-account?start=2012-09-01&max_pages=12` | 2026-11-04 接入。取 `data[].avg_guarantee_ratio`（东财 `RPTA_WEB_MARGIN_DAILYTRADE` 的 `AVG_GUARANTEE_RATIO`），与原来的 `ak.stock_margin_account_info()` **同一张表、同一字段**。 |
 
-换掉之后 `requirements.txt` 与 workflow 里的 `akshare` 可以整条删掉（连带 pandas 之外的依赖也变轻）。
+接入时做过逐日对拍：端点 3420 行 → 剔掉 70 个 `null` 后 3350 行，与旧序列 3349 行完全重合、只多最新一天；
+**除 `pack(nd=2)` 的两位小数截断外，0 天数值不一致**，全样本极值 `low 208.81` / `high 308.3` 也一字不差。
+据此按第 11 部分第 7 条判断：指标水平值未变，**227% / 230% 阈值与历史分位无须重设**。
+
+M14 的取数现在是三级：`a-stock-api` → `akshare` → `cache/danbao.csv`。
+第二级保留是因为端点是单点，挂了不能断数；第三级 `danbao.csv` 由 `_danbao_fetch.py` 本地尾刷、云端刷不动，只作最后兜底。
+
+### 还没接（且短期内不建议接）
+
+**M13 交易集中度** —— 本节早前写过「M13 换成 `/api/market-turnover`」，**那个对照是错的，已作废**：
+
+- `/api/market-turnover` 返回的是 `sh000001 + sz399001` **两只指数的成交额**，只能当 M13 的**分母**；
+- M13 的定义是「成交额排名前 5% 个股合计 ÷ 全市场成交额」，分子需要**全市场 5200+ 只个股**的当日快照，两者不是一回事。
+
+真要做，得先给 a-stock-api 新增 `/api/stock-turnover-snapshot`：
+
+- 内部必须走腾讯批量 `qt.gtimg.cn/q=`（现路径，不封 IP）；**不能走东财 push2** —— Worker 出口打 push2 会 502，`worker.js` 里已有实测注释；
+- 5200 只分批约 60~100 次 subrequest，单次 Worker 请求做不完，应配 **Cron Trigger 收盘后跑一次写 KV**，下游读当日快照。
+
+### 关于删掉 akshare
+
+做完 M14 之后 `akshare` **不能删**，它还有 4 处在用：M3 乐咕 PE/PB（`stock_index_pe_lg`）、
+国债收益率兜底（`bond_zh_us_rate`）、M4 基金净值兜底（`fund_open_fund_info_em`）、
+M13 全市场快照兜底（`stock_zh_a_spot_em`）。`requirements.txt` 与 workflow 的 `pip install` 照旧。
+（本节早前那句「akshare 可以整条删掉」同样不成立，一并作废。）
+
 **换源必须遵守第 11 部分第 7 条：指标水平值若变化，判定阈值要重设，且四处一起改。**
 
 ## 13.4 提示词（复制这段给 AI）
@@ -929,7 +955,8 @@ make_llm_summary.py → llms.txt / snapshot.md / latest.json（AI 摘要）
 - 乐咕乐股：沪深300 / 上证红利 的 PE、PB（月频，唯一仍在用的第三方长周期源）。
 - 中债登 + 美国财政部（official.py）：中/美 10 年期国债收益率。
 - 申万 807330、中证 H11023：M3/M5 的云端续接腿。
-- akshare：目前仅 M13（两市成交额兜底）与 M14（两融）在用，属可替换项（见 13.3）。
+- a-stock-api（自建 Worker）：M14 两融担保比例的每日刷新（`/api/margin-account`），端点故障时回退 akshare。
+- akshare：M3 乐咕 PE/PB、国债收益率兜底、M4 基金净值兜底、M13 全市场快照兜底 —— 四处仍是唯一路径，不能删。
 
 【铁律（违反会静默出错，不报错）】
 1. cache/ 不要删、不要改回 actions/cache；wind885003.csv / wind885006.csv 尤其不能删。

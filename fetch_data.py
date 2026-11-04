@@ -483,6 +483,35 @@ def get_rates():
     return old
 
 
+# ----------------------------------------------------------- 自建数据 API（a-stock-api）
+# 把「第三方接口 + 解析」这层收到一处，脚本只消费 JSON。
+# 端点源码与字段口径见 https://github.com/wj624/a-stock-api
+# 设计约束：
+#   1) 任何异常都返回 None，由调用方决定回退 —— 它是加速层，不是唯一源；
+#   2) 不重试。Worker 侧自带 KV 缓存，重试只会把 5s 的失败拖成 15s，还挤占本就紧张的 15min 抓取窗口；
+#   3) 超时 30s。部分端点要翻十几页上游，比单次抓取慢得多。
+API_BASE = os.environ.get("EARL_API_BASE",
+                          "https://a-stock-api.wj4020410.workers.dev").rstrip("/")
+
+
+def _api_json(path, params=None, timeout=30):
+    """GET 自建 API，返回 dict；任何失败都返回 None（调用方据此回退）。"""
+    try:
+        r = requests.get(API_BASE + path, params=params or {}, timeout=timeout,
+                         headers={"User-Agent": UA})
+        if r.status_code != 200:
+            log(f"    API {path} HTTP {r.status_code}")
+            return None
+        j = r.json()
+        if not isinstance(j, dict) or j.get("error"):
+            log(f"    API {path} 异常返回: {str(j)[:120]}")
+            return None
+        return j
+    except Exception as e:
+        log(f"    API {path} 失败: {type(e).__name__}: {str(e)[:100]}")
+        return None
+
+
 # ----------------------------------------------------------- 抓全部行情
 def fetch_all(deep=True):
     data, used = {}, {}
@@ -1821,35 +1850,62 @@ def main(deep=True):
 
     # ---------- M14 融资盘担保比例（227% 强平线） ----------
     # 口径：全市场平均维持担保比例 = 担保物总价值 ÷ 融资融券负债，中证金融「融资融券账户统计」
-    #   官方日频，2012-09-27 起。数据由 _danbao_fetch.py 尾刷进 cache/danbao.csv
-    #   （本脚本只读缓存、零 Wind 请求，与 M1/M3/M5 的 Wind 缓存同一套路）。
+    #   官方日频，2012-09-27 起。三级取数：a-stock-api → akshare → cache/danbao.csv。
+    #   前两级读的都是东财同一张表（RPTA_WEB_MARGIN_DAILYTRADE），数值应逐字相同，
+    #   所以换源不改变指标水平、无须重设 227% / 230% 阈值；第三级 danbao.csv 由
+    #   _danbao_fetch.py 本地尾刷、云端刷不动，只作最后兜底。
     # 227%：市场反复引用的「集体强平线」。跌破后融资盘从慢性失血转入被动去杠杆，
     #   历史上与指数阶段底部高度同步（2013-06、2015-07/08、2016-01、2018-10、2024-02）。
     # 2015-04-29~2015-08-03 官方确实未披露（68 个交易日），flag=估算 的那段是建模重建
     #   （担保物价值 ÷ 负债 × 插值 k 系数），前端据此画橙色虚线 —— 必须与真实观测区分。
     try:
         _s14, _est14 = None, None
-        # 1) 云端优先：东方财富「两融账户信息」——含官方「平均维持担保比例」日频，单次返回全历史。
-        #    （原 danbao.csv 由 _danbao_fetch.py 本地尾刷、云端无法刷新，会永久冻结在某一日。）
-        try:
-            import akshare as ak
-            _m14df = ak.stock_margin_account_info()
-            _cd = next((c for c in _m14df.columns if "日期" in str(c)), None)
-            _cv = next((c for c in _m14df.columns if "维持担保比例" in str(c)), None)
-            if _cd is not None and _cv is not None:
-                _t = _m14df[[_cd, _cv]].copy()
-                _t.columns = ["date", "value"]
-                _t["_dt"] = pd.to_datetime(_t["date"].astype(str), errors="coerce").dt.normalize()
-                _t["value"] = pd.to_numeric(_t["value"], errors="coerce")
-                _t = (_t.dropna(subset=["_dt", "value"]).drop_duplicates("_dt", keep="last")
-                      .sort_values("_dt"))
-                if len(_t) > 250:
-                    _s14 = _t.set_index("_dt")["value"].astype(float)
-                    _est14 = pd.Series(0, index=_s14.index, dtype=int)   # 云端全为官方值
-                    log(f"  M14 云端两融账户统计 OK（{len(_s14)} 行，最新 {_s14.index[-1]:%Y-%m-%d}）")
-        except Exception as e:
-            log(f"  M14 云端两融取数失败，回退本地缓存: {e}")
-        # 2) 回退：本地 danbao.csv（保留 2015 官方缺口的估算重建）
+        # 1) 首选：自建 a-stock-api 的 /api/margin-account —— 与 akshare 同源同字段
+        #    （东财 datacenter RPTA_WEB_MARGIN_DAILYTRADE 的 AVG_GUARANTEE_RATIO），
+        #    换成一次 HTTP 拿全历史，不必为一个指标拉起整个 akshare。
+        #    Worker 侧带 KV 缓存，同一天重跑不会重复打上游。
+        _j14 = _api_json("/api/margin-account",
+                         {"start": "2012-09-01", "max_pages": 12})
+        if _j14:
+            _rows14 = [x for x in (_j14.get("data") or []) if isinstance(x, dict)]
+            _a14 = pd.DataFrame([{"date": x.get("date"),
+                                  "value": x.get("avg_guarantee_ratio")}
+                                 for x in _rows14])
+            if len(_a14):
+                _a14["_dt"] = pd.to_datetime(_a14["date"].astype(str),
+                                             errors="coerce").dt.normalize()
+                _a14["value"] = pd.to_numeric(_a14["value"], errors="coerce")
+                _a14 = (_a14.dropna(subset=["_dt", "value"])
+                        .drop_duplicates("_dt", keep="last").sort_values("_dt"))
+                if len(_a14) > 250:
+                    _s14 = _a14.set_index("_dt")["value"].astype(float)
+                    _est14 = pd.Series(0, index=_s14.index, dtype=int)   # 全为官方披露值
+                    log(f"  M14 a-stock-api 两融账户 OK（{len(_s14)} 行，"
+                        f"最新 {_s14.index[-1]:%Y-%m-%d}）")
+                else:
+                    log(f"  M14 a-stock-api 行数不足（{len(_a14)}），回退 akshare")
+        # 2) 回退：akshare（原路径，保留一版 —— 端点故障时不能断数）
+        if _s14 is None:
+            try:
+                import akshare as ak
+                _m14df = ak.stock_margin_account_info()
+                _cd = next((c for c in _m14df.columns if "日期" in str(c)), None)
+                _cv = next((c for c in _m14df.columns if "维持担保比例" in str(c)), None)
+                if _cd is not None and _cv is not None:
+                    _t = _m14df[[_cd, _cv]].copy()
+                    _t.columns = ["date", "value"]
+                    _t["_dt"] = pd.to_datetime(_t["date"].astype(str), errors="coerce").dt.normalize()
+                    _t["value"] = pd.to_numeric(_t["value"], errors="coerce")
+                    _t = (_t.dropna(subset=["_dt", "value"]).drop_duplicates("_dt", keep="last")
+                          .sort_values("_dt"))
+                    if len(_t) > 250:
+                        _s14 = _t.set_index("_dt")["value"].astype(float)
+                        _est14 = pd.Series(0, index=_s14.index, dtype=int)   # 云端全为官方值
+                        log(f"  M14 akshare 两融账户统计 OK（{len(_s14)} 行，"
+                            f"最新 {_s14.index[-1]:%Y-%m-%d}）")
+            except Exception as e:
+                log(f"  M14 akshare 两融取数失败，回退本地缓存: {e}")
+        # 3) 回退：本地 danbao.csv（保留 2015 官方缺口的估算重建）
         if _s14 is None:
             _p14 = os.path.join(CACHE, "danbao.csv")
             if os.path.exists(_p14):
@@ -1917,7 +1973,8 @@ def main(deep=True):
                         "est_days": int(_est14.sum()), "n": int(len(_s14)),
                         "marks": _marks14(_s14)}
             }
-            SRC["m14"] = "东方财富「两融账户信息」官方日频（平均维持担保比例，akshare 云端每日刷新；失败回退本地缓存）"
+            SRC["m14"] = ("东方财富「两融账户信息」官方日频（平均维持担保比例，经自建 a-stock-api "
+                          "每日刷新；端点故障时回退 akshare → 本地缓存）")
             log(f"  M14 融资盘担保比例 OK（{M['m14']['cur']['date']} {_v14:.2f}%，"
                 f"距227% {_v14 - 227:+.2f}pt；破线 全样本 {_n_all}天/{_r_all}轮、"
                 f"2015起 {_n15}天/{_r15}轮；估算段 {int(_est14.sum())} 天）")
