@@ -35,15 +35,15 @@ jobs:
           KEY_FILE: "fetch_data.py"
         run: |
           set -euo pipefail
-          test -f README.md || { echo "::error::README.md 缺失，放弃压缩"; exit 1; }
-          test -f "$KEY_FILE" || { echo "::error::$KEY_FILE 缺失，放弃压缩"; exit 1; }
+          test -f README.md || { echo "::error::README.md missing, abort"; exit 1; }
+          test -f "$KEY_FILE" || { echo "::error::$KEY_FILE missing, abort"; exit 1; }
           N=$(git ls-files | wc -l)
-          test "$N" -ge 8 || { echo "::error::跟踪文件仅 $N 个，疑似不完整，放弃压缩"; exit 1; }
+          test "$N" -ge 8 || { echo "::error::only $N tracked files, looks incomplete, abort"; exit 1; }
           OLD=$(git rev-parse HEAD)
           TREE=$(git rev-parse 'HEAD^{tree}')
           echo "old_head=$OLD" >> "$GITHUB_OUTPUT"
           echo "tree=$TREE" >> "$GITHUB_OUTPUT"
-          echo "::notice::压缩前 HEAD=$OLD，跟踪文件 $N 个，tree=$TREE"
+          echo "::notice::before: HEAD=$OLD, tracked=$N, tree=$TREE"
 
       - name: Cut parent chain via Git Data API
         env:
@@ -55,14 +55,14 @@ jobs:
           REPO="${{ github.repository }}"
           BODY=$(printf '{"message":"chore: monthly snapshot - keep current tree, drop commit history","tree":"%s","parents":[]}' "$TREE")
           NEW=$(printf '%s' "$BODY" | gh api -X POST "repos/$REPO/git/commits" --input - --jq '.sha')
-          test -n "$NEW" || { echo "::error::建立 root commit 失败"; exit 1; }
+          test -n "$NEW" || { echo "::error::failed to create root commit"; exit 1; }
           gh api -X PATCH "repos/$REPO/git/refs/heads/main" -f sha="$NEW" -F force=true > /dev/null
           ACTUAL=$(gh api "repos/$REPO/git/refs/heads/main" --jq '.object.sha')
-          test "$ACTUAL" = "$NEW" || { echo "::error::ref 未指向新 commit"; exit 1; }
+          test "$ACTUAL" = "$NEW" || { echo "::error::ref not pointing at new commit"; exit 1; }
           P=$(gh api "repos/$REPO/git/commits/$NEW" --jq '.parents | length')
-          test "$P" = "0" || { echo "::error::新 commit 不是 root commit"; exit 1; }
-          echo "::notice::完成：main 现在是无父快照 $NEW，工作树内容一字未改"
-          echo "::notice::回滚命令（对象短期内仍可达）：git push --force origin $OLD_HEAD:main"
+          test "$P" = "0" || { echo "::error::new commit is not a root commit"; exit 1; }
+          echo "::notice::done: main is now root snapshot $NEW, tree unchanged"
+          echo "::notice::rollback (while old objects are still reachable): git push --force origin $OLD_HEAD:main"
 
       - name: Record rollback SHA
         if: always()
