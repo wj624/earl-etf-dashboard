@@ -32,7 +32,8 @@ jobs:
           python-version: '3.11'
 
       - name: 安装依赖
-        run: pip install requests numpy pandas akshare
+        # 与 requirements.txt 保持一致；pandas 3.x 有破坏性变更（见 rotation README 附录），锁 <3。
+        run: pip install "requests<3" "numpy<3" "pandas<3" "akshare<2"
 
       # 【2026-11-01 移除 actions/cache】原做法是 path: cache + 固定 key "etf-cache-v2"。
       # actions/cache 的 key 是**不可变**的：首次写入后再也不会更新，日志里一直是

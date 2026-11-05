@@ -4,5 +4,5 @@
 # fetch_data.py 里是函数内延迟导入，缺了不会整体崩溃，但这些分支会退化成读旧缓存。
 requests<3
 numpy<3
-pandas<4
+pandas<3
 akshare<2
