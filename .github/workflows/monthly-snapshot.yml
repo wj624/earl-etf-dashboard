@@ -1,19 +1,38 @@
-# 【已停用每月自动执行】仅保留手动入口（workflow_dispatch）。
-# 原因：force 重写 main 历史会抹掉随仓库提交的数据资产历史、破坏外部克隆 / fork，
-# 且回滚 SHA 一旦过期就不可恢复。压缩体积前请先自行评估，并确认 JSON 有效。
+# 【按体积自动清理 · 2026-11-05 策略调整】
+# 原设计：每月 1 号无条件用 Git Data API 把 main 重写为 parents=[] 的 root commit，
+# 目的是防止「每日产物入库」让仓库长期运行后无限膨胀。它确实能封顶，但代价是
+# 抹掉随仓库提交的数据资产历史、破坏外部克隆 / fork、回滚 SHA 过期即不可恢复。
 #
-# 做法：用 Git Data API 建一个 tree 与当前 HEAD 完全相同、但 parents=[] 的 root commit，
-# 再把 refs/heads/main 指过去。工作树内容一个字节都不改，只是把提交父链剪断；
+# 现在：每周一 UTC 03:00（北京 11:00，避开全部日报时段）只做一次「体积体检」，
+# 仅当仓库 >= 500 MB 时才真正剪断历史；其余绝大多数周只读一次体积就结束，
+# **一个字节都不改、绝不碰 main**。既满足「基本无维护、占用空间少」，又不牺牲可回滚性。
+#
+# 实测（2026-11-05）：6 仓合计约 67 MB、最大单文件 4.4 MB、仓库才 2~6 天大，
+# 稳定后约 1~2 MB/天，约 8 个月~1 年才会第一次触发；清完回到约 10 MB 再重新累积。
+# GitHub 官方是「理想 < 1 GB、强烈建议 < 5 GB」的建议值，不是免费版封顶；
+# 单文件硬限 100 MB；6 仓均为 public，Actions 分钟数免费不限量。
+#
+# 手动入口：workflow_dispatch 默认「只体检不改动」；勾选 force 才忽略阈值立即清理。
+#
+# 剪断原理（未改）：建一个 tree 与当前 HEAD 完全相同、但 parents=[] 的 root commit，
+# 再把 refs/heads/main 指过去。工作树内容一个字节都不改，只剪断提交父链；
 # 旧 commit 变成不可达对象，由 GitHub 后台 repack 回收。
 # - 不走 git push --force ⇒ 不触发任何 on: push 工作流
 # - 不改任何文件 ⇒ 定时任务 checkout 后行为完全不变
-# - 旧 HEAD 打进日志与 artifact ⇒ 出问题时可一条命令回滚
+# - 旧 HEAD 打进日志与 artifact ⇒ 出问题时可一条命令回滚（保留 365 天）
 #
-# UTC 03:00 = 北京 11:00，刻意避开全部日报时段（最近的是 22:30 UTC 与 10:30 UTC）。
-name: Monthly snapshot (fixed-size repo)
+name: Size-guarded snapshot (auto only >= 500 MB)
 
 on:
+  schedule:
+    - cron: "0 3 * * 1"
   workflow_dispatch:
+    inputs:
+      force:
+        description: "勾选才真正剪断历史；不勾选只做体积体检，不改动任何东西"
+        required: false
+        default: false
+        type: boolean
 
 permissions:
   contents: write
@@ -29,7 +48,40 @@ jobs:
     steps:
       - uses: actions/checkout@v5
 
+      - name: Check repository size (no writes)
+        id: size
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO: ${{ github.repository }}
+          EVENT: ${{ github.event_name }}
+          FORCE: ${{ inputs.force }}
+          EVENT_SIZE: ${{ github.event.repository.size }}
+          THRESHOLD_KB: "512000"
+        run: |
+          set -euo pipefail
+          KB=""
+          if KB=$(gh api "repos/$REPO" --jq '.size' 2>/dev/null); then :; else KB="$EVENT_SIZE"; fi
+          if ! [[ "$KB" =~ ^[0-9]+$ ]]; then
+            echo "::error::无法读取仓库体积，安全跳过（不清理）"
+            echo "compact=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          echo "::notice::repo size = ${KB} KB (threshold ${THRESHOLD_KB} KB = 500 MB)"
+          COMPACT=false
+          if [ "$EVENT" = "workflow_dispatch" ] && [ "$FORCE" = "true" ]; then
+            echo "::notice::manual dispatch with force=true => will compact"
+            COMPACT=true
+          elif [ "$KB" -ge "$THRESHOLD_KB" ]; then
+            echo "::notice::size reached threshold => will compact"
+            COMPACT=true
+          else
+            echo "::notice::below threshold: nothing to do, main history untouched"
+          fi
+          echo "compact=$COMPACT" >> "$GITHUB_OUTPUT"
+          echo "size_kb=$KB" >> "$GITHUB_OUTPUT"
+
       - name: Guard - 先确认工作树完整，否则绝不剪断历史
+        if: steps.size.outputs.compact == 'true'
         id: guard
         env:
           KEY_FILE: "fetch_data.py"
@@ -39,13 +91,25 @@ jobs:
           test -f "$KEY_FILE" || { echo "::error::$KEY_FILE missing, abort"; exit 1; }
           N=$(git ls-files | wc -l)
           test "$N" -ge 8 || { echo "::error::only $N tracked files, looks incomplete, abort"; exit 1; }
-          # 数据有效性：随仓库提交的 JSON 必须全部合法，否则绝不剪断历史
+          # 数据有效性：所有被跟踪的 JSON 必须全部合法，否则绝不剪断历史
           # （旧 guard 只数文件个数，坏树会被固化成唯一 root commit）
-          for f in *.json; do
+          while IFS= read -r -d '' f; do
             [ -f "$f" ] || continue
             python3 -m json.tool "$f" >/dev/null || { echo "::error::$f 不是合法 JSON，abort"; exit 1; }
-          done
-          echo "::notice::JSON guard passed"
+          done < <(git ls-files -z '*.json')
+          echo "::notice::JSON guard passed (all tracked *.json)"
+          # 按体积触发特有的护栏：体积暴涨往往是误提交大文件，
+          # 绝不能把这种异常树固化成「唯一的 root commit」。
+          python3 - <<'PY'
+          import os, subprocess
+          files = subprocess.check_output(["git", "ls-files", "-z"]).decode().split("\0")
+          big = [(os.path.getsize(f), f) for f in files
+                 if f and os.path.exists(f) and os.path.getsize(f) > 50 * 1024 * 1024]
+          if big:
+              print("::error::存在超过 50MB 的被跟踪文件（疑似误提交），abort: %s" % big[:3])
+              raise SystemExit(1)
+          print("::notice::所有被跟踪文件均 < 50MB")
+          PY
           OLD=$(git rev-parse HEAD)
           TREE=$(git rev-parse 'HEAD^{tree}')
           echo "old_head=$OLD" >> "$GITHUB_OUTPUT"
@@ -53,6 +117,7 @@ jobs:
           echo "::notice::before: HEAD=$OLD, tracked=$N, tree=$TREE"
 
       - name: Cut parent chain via Git Data API
+        if: steps.size.outputs.compact == 'true'
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           OLD_HEAD: ${{ steps.guard.outputs.old_head }}
@@ -60,7 +125,7 @@ jobs:
         run: |
           set -euo pipefail
           REPO="${{ github.repository }}"
-          BODY=$(printf '{"message":"chore: monthly snapshot - keep current tree, drop commit history","tree":"%s","parents":[]}' "$TREE")
+          BODY=$(printf '{"message":"chore: size-guarded snapshot - keep current tree, drop commit history","tree":"%s","parents":[]}' "$TREE")
           NEW=$(printf '%s' "$BODY" | gh api -X POST "repos/$REPO/git/commits" --input - --jq '.sha')
           test -n "$NEW" || { echo "::error::failed to create root commit"; exit 1; }
           gh api -X PATCH "repos/$REPO/git/refs/heads/main" -f sha="$NEW" -F force=true > /dev/null
@@ -72,11 +137,11 @@ jobs:
           echo "::notice::rollback (while old objects are still reachable): git push --force origin $OLD_HEAD:main"
 
       - name: Record rollback SHA
-        if: always()
+        if: always() && steps.size.outputs.compact == 'true'
         run: |
           echo "${{ steps.guard.outputs.old_head }}" > previous_main_head.txt
       - uses: actions/upload-artifact@v6
-        if: always()
+        if: always() && steps.size.outputs.compact == 'true'
         with:
           name: monthly-snapshot-rollback-sha
           path: previous_main_head.txt
