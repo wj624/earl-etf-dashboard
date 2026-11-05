@@ -27,7 +27,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - name: Guard - 先确认工作树完整，否则绝不剪断历史
         id: guard
@@ -68,7 +68,7 @@ jobs:
         if: always()
         run: |
           echo "${{ steps.guard.outputs.old_head }}" > previous_main_head.txt
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v6
         if: always()
         with:
           name: monthly-snapshot-rollback-sha
