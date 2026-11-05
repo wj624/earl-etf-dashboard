@@ -147,7 +147,7 @@ def chinabond_10y(y0=2006, y1=None, log=print, sleep=1.2):
         d = chinabond_year(y, sess)
         if d is None or not len(d):
             if old is not None:
-                log(f"    中债登 {y}: 官方源超时/失败（{tries} 次），沿用缓存 {len(old)} 行")
+                log(f"    中债登 {y}: 官方源超时/失败，沿用缓存 {len(old)} 行")
                 frames.append(old)      # 当年抓取失败：退回旧缓存，别让整年消失
             else:
                 log(f"    中债登 {y} 年获取失败")

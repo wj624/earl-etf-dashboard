@@ -2,7 +2,7 @@
 # akshare 供 M3 乐咕 PE/PB、国债收益率兜底、M4 基金净值兜底、M13 全市场快照兜底使用
 # （M14 两融已改走自建 a-stock-api，akshare 降为第二兜底）；
 # fetch_data.py 里是函数内延迟导入，缺了不会整体崩溃，但这些分支会退化成读旧缓存。
-requests
-numpy
-pandas
-akshare
+requests<3
+numpy<3
+pandas<4
+akshare<2

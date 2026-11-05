@@ -90,6 +90,13 @@ jobs:
 
       - name: 提交并推送
         run: |
+          # 数据有效性守卫：关键产物必须存在、非空且 JSON 合法。
+          # 不做「必须是今天」的判定：节假日 / 披露滞后属正常（见 README 维护须知）。
+          for f in data.json latest.json index.html version.txt llms.txt; do
+            test -s "$f" || { echo "::error::守卫失败：$f 缺失或为空"; exit 1; }
+            case "$f" in *.json) python3 -m json.tool "$f" >/dev/null || { echo "::error::$f 不是合法 JSON"; exit 1; } ;; esac
+          done
+          echo "数据有效性守卫通过"
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
           # data.js 不再提交（= data.json 的副本，2.2MB/天纯冗余；build.py 需要时会现生成）

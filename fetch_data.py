@@ -504,11 +504,11 @@ def _api_json(path, params=None, timeout=30):
             return None
         j = r.json()
         if not isinstance(j, dict) or j.get("error"):
-            log(f"    API {path} 异常返回: {str(j)[:120]}")
+            log(f"::warning::    API {path} 异常返回: {str(j)[:120]}")
             return None
         return j
     except Exception as e:
-        log(f"    API {path} 失败: {type(e).__name__}: {str(e)[:100]}")
+        log(f"::warning::    API {path} 失败: {type(e).__name__}: {str(e)[:100]}")
         return None
 
 

@@ -127,7 +127,7 @@ def main():
     if DATA_ANCHOR not in tpl:
         raise SystemExit("template.html 中找不到数据锚点")
 
-    out = tpl.replace(ECHARTS_TAG, "<script>\n/* ECharts 5.5.1 (inlined) */\n" + ec + "\n</script>")
+    out = tpl.replace(ECHARTS_TAG, "<script>\n/* ECharts 5.6.0 (inlined) */\n" + ec + "\n</script>")
     out = out.replace(DATA_ANCHOR, "<script>\n/* 指标数据 (inlined) */\n" + data + "\n</script>\n\n")
 
     stamp = dt.datetime.now().strftime("%Y-%m-%d %H:%M")
@@ -149,13 +149,13 @@ def main():
             fh.write(ver)
         print(f"已写 version.txt  {ver}")
     except Exception as e:
-        print("version.txt 写入失败：", e)
+        raise RuntimeError("version.txt 写入失败，终止构建（前端版本探针依赖它）") from e
 
     # 重建独立页 anchor_v2.html 的内嵌数据（让它也随每日构建自动更新）
     try:
         rebuild_anchor()
     except Exception as e:
-        print("anchor_v2 重建失败（忽略，不影响主页）：", e)
+        print(f"[WARN] anchor_v2 重建失败（独立页，不影响主页）：{e}")
 
 
 if __name__ == "__main__":

@@ -1,4 +1,6 @@
-# 每月 1 号把 main 压成「单个无父快照」，让仓库体积恒定有界。
+# 【已停用每月自动执行】仅保留手动入口（workflow_dispatch）。
+# 原因：force 重写 main 历史会抹掉随仓库提交的数据资产历史、破坏外部克隆 / fork，
+# 且回滚 SHA 一旦过期就不可恢复。压缩体积前请先自行评估，并确认 JSON 有效。
 #
 # 做法：用 Git Data API 建一个 tree 与当前 HEAD 完全相同、但 parents=[] 的 root commit，
 # 再把 refs/heads/main 指过去。工作树内容一个字节都不改，只是把提交父链剪断；
@@ -11,8 +13,6 @@
 name: Monthly snapshot (fixed-size repo)
 
 on:
-  schedule:
-    - cron: "0 3 1 * *"
   workflow_dispatch:
 
 permissions:
@@ -39,6 +39,13 @@ jobs:
           test -f "$KEY_FILE" || { echo "::error::$KEY_FILE missing, abort"; exit 1; }
           N=$(git ls-files | wc -l)
           test "$N" -ge 8 || { echo "::error::only $N tracked files, looks incomplete, abort"; exit 1; }
+          # 数据有效性：随仓库提交的 JSON 必须全部合法，否则绝不剪断历史
+          # （旧 guard 只数文件个数，坏树会被固化成唯一 root commit）
+          for f in *.json; do
+            [ -f "$f" ] || continue
+            python3 -m json.tool "$f" >/dev/null || { echo "::error::$f 不是合法 JSON，abort"; exit 1; }
+          done
+          echo "::notice::JSON guard passed"
           OLD=$(git rev-parse HEAD)
           TREE=$(git rev-parse 'HEAD^{tree}')
           echo "old_head=$OLD" >> "$GITHUB_OUTPUT"
@@ -73,4 +80,4 @@ jobs:
         with:
           name: monthly-snapshot-rollback-sha
           path: previous_main_head.txt
-          retention-days: 90
+          retention-days: 365
