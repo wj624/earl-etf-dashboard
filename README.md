@@ -1263,9 +1263,21 @@ ValueError: 'M' is no longer supported for offsets. Please use 'ME' instead.
 
 **回滚**：`git revert <本修复 commit>` 即可。`cache/zzqz985.csv` 是纯增量、`fetch_data.py` 是纯新增函数与两处调用，回滚不影响其它缓存或任何口径；但回滚后「WAF 熔断 → M4 拉直线 / M6a 串线」会原样复发。
 
-### K.8 云端 workflow 实测记录
+### K.8 云端 workflow 实测记录（2026-11-08 回填）
 
-> 待本次修复推送后手动 dispatch「每日自动更新看板」并回填，格式：`run <id> · success · 产物提交 <sha> · data.json 核验 m4 叠加列不再直线 / m6a.ratio ≈ 0.8768 · version.txt 在提交内 · index.html 无「数据补充中」`。
+| 项 | 结果 |
+| --- | --- |
+| 源码提交 | `788b7d6` · `fix: 修复 M4 叠加线拉直线与 M6a 比值反转两处静默数据错误（补数+两道护栏）` · 3 文件 **266 行纯增量**；GitHub API 核验 3 文件全 `+N/-0`、blob SHA 逐项一致 |
+| 手动 dispatch | run **`42394732598`**，基于 `788b7d6`，`2026-11-07T17:07:30Z` 启动 |
+| workflow 结果 | **`completed / success`**，约 3m27s，日志 425 行、**0 traceback / 0 fatal**；`M4 偏股基金3年滚动年化 OK（含中证全指叠加）`、`m6a 三棱镜 OK` |
+| 本轮又撞 WAF（正是护栏要顶住的场景） | `H00300` / `H00922` 连续 2 次 403 → 放弃本只；`中证官网限流（3 个不同代码 403）→ 熔断，冷却 12 min`；`⏭ 000985 20261106~20261108 跳过：本轮中证源已熔断，沿用旧缓存` |
+| 护栏日志 | 本轮**未触发（幂等预期）**：`zzqz985.csv` 与 `tc_000985_ohlc.csv` 末日均已对齐到 `20261106`，护栏 1 无缺口可补；m6a 本轮数据正常，护栏 2 无断崖可拦。护栏处于待命状态，触发时行为已由 K.7 的 26 项隔离验证证明 |
+| 产物自动提交 | `5cacad4` · `chore: 自动更新 2026-11-08 01:11`，含 `index.html` / `data.json` / `version.txt` / `llms.txt` / `snapshot.md` / `latest.json`（`cache/zzqz985.csv` 已在 `788b7d6` 落地、本轮无变化，故不在此提交内，合规） |
+| Pages | `status=built` / `error=none` / commit `5cacad4` |
+| 线上独立核验 | `verify_earl_online.py` **29 PASS / 0 FAIL**：M4 叠加线尾部 14 日有 **14 个不同值**（不再是直线）、与原版 12 个重叠交易日逐值一致；`m6a.cur.ratio = 0.8768`、`b = 13168.11`（全收益口径，不是 7236 价格指数）；20 个模块齐全；`version.txt == data.json.updated == 2026-11-08 01:10`；`index.html` 3 MB+、含 `window.DATA`、无「数据补充中」空白卡；线上 `fetch_data.py` 含三个护栏函数与两处调用、README 含附录 K |
+| 真实浏览器渲染 | 无头 Chromium 打开 `https://wj624.github.io/earl-etf-dashboard/#m4`：DOM 3.45 MB、`#m4` 容器存在、`数据补充中` / `echarts is not defined` / `Uncaught` 均为 0；页面内 `window.DATA` 读到 `updated=2026-11-08 01:10`、M4 叠加线尾部 14 日 14 个不同值、`m6a.ratio=0.8768` / `b=13168.11` |
+
+> **本轮 M4 是靠补齐的缓存修好的，护栏 1 未实际触发**——这正是双保险设计的意义：缓存本身完整时护栏静默待命，缓存再次落后时护栏自动接管。**不要因为日志里没出现「护栏1」就误以为护栏没上线**；线上 `fetch_data.py` 已含全部三个函数（核验脚本逐项断言通过）。
 
 ### K.9 给 AI 的维护边界（复制这段）
 
