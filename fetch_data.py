@@ -710,6 +710,41 @@ def lv(*ss):
     return out
 
 
+# ----------------------------------------------------------- 三棱镜水平值断崖护栏（2026-11-08）
+def _guard_level_jump(s, label, max_jump=0.25, tail=120):
+    """【护栏 2】拦截「不同口径被串进同一条序列」造成的水平值断崖。
+
+    背景：H31586 = [csi 931586(价格指数, ≈7200), csi 931586CNY01(全收益, ≈13100)]，
+    两者标了 same=True 可合并以拉长历史。当 CNY01 被中证 WAF 熔断、缓存末日
+    落后于 931586 时，merge() 会把价格指数的尾部接到全收益曲线后面 ——
+    M6a 的比值瞬间从 0.8768 翻成 1.6315、40 日收益差方向反转，
+    且 workflow 仍 success、日志不报错，属于典型的静默出错。
+
+    实证：本仓 m6a/m6b/m6c/m7 四组 prism 序列全历史最大单日跳变仅 11.93%，
+    |涨跌| > 25% 的记录为 0，故 25% 阈值零误伤。只看尾部 tail 日，
+    历史段设计内的降级拼接（见 FALLBACK_NOTE）不受影响。
+
+    返回 (序列, 首个断崖位置)：发现断崖时把该点及其之后置 NaN，
+    由 prism() 统一截断 idx，保证 cur.date 与曲线末端一致，
+    而不是画一条方向相反的假曲线。
+    """
+    if s is None or len(s) < 2:
+        return s, None
+    v = s.astype(float)
+    chg = v / v.shift(1) - 1.0
+    start = max(1, len(v) - tail)
+    bad = chg.iloc[start:].abs() > max_jump
+    if not bad.any():
+        return s, None
+    j = start + int(np.flatnonzero(bad.values)[0])
+    out = v.copy()
+    out.iloc[j:] = np.nan
+    log("  ⛔ 护栏2: %s 第 %d 点(%s) 单日跳变 %+.1f%% > %.0f%%，疑似口径串线，其后置空"
+        % (label, j, s.index[j].date(), chg.iloc[j] * 100, max_jump * 100))
+    return out, j
+
+
+
 # ----------------------------------------------------------- 真实偏债混合基准（基金累计复权净值）
 def fetch_fund_nav(code):
     """真实偏债混合基准：基金「累计净值」(含分红再投资≈总回报)。
@@ -816,6 +851,84 @@ def fetch_sw_fund_index(code="807330"):
     return old
 
 
+# ----------------------------------------------------------- M4 中证全指叠加线护栏（2026-11-08）
+def _zz_trade_calendar():
+    """从仓库内多份中证系缓存取真实交易日并集。
+
+    中证 index-perf 会把周末/节假日填成与相邻交易日完全相同的一行
+    （例 2026-10-25 == 2026-10-26），补数时必须按交易日历过滤。
+    取多份并集是因为各缓存刷新有先后：930950 常落后一两天，931586 等已到最新。
+    cal 为空时调用方不做过滤（宽松降级），绝不因此中断补数。
+    """
+    cal = set()
+    for _n in ("csi930950.csv", "csi931586.csv", "csi000300.csv",
+               "csi931586CNY01.csv", "csi931589CNY01.csv"):
+        _p = os.path.join(CACHE, _n)
+        if not os.path.exists(_p):
+            continue
+        try:
+            _d = pd.read_csv(_p, dtype={"date": str})
+            for _x in _d["date"]:
+                _ds = str(_x).replace("-", "")
+                if len(_ds) == 8 and _ds.isdigit():
+                    cal.add(_ds)
+        except Exception:
+            continue
+    return cal
+
+
+def _zz_backfill_from_tc(old):
+    """【护栏 1】用 tc_000985_ohlc.csv 的 close 补齐 zzqz985.csv 尾部缺口。
+
+    实证（2026-11-08，5289 个重叠交易日）：zzqz985.csv.close 与
+    tc_000985_ohlc.csv.close 逐值一致（均差 0.00，仅 47 日有 0.01 的
+    2 位小数舍入差），且原版页面 M4 叠加列 == tc.close —— 两者是同一份
+    中证全指 000985 官方收盘，只是两条独立缓存链路。故直接同源续接，
+    不做任何比例换算，也不覆盖已有行。
+
+    为什么需要：zzqz985 走 csindex 分块接口，中证 WAF 熔断时会停在旧日期；
+    M4 随后对 zz 做 reindex(s.index).ffill()，把旧值一路填成一条直线，
+    workflow 仍 success、日志不报错（2026-11 实测尾部连续 14 日全是 5292.21）。
+    tc 走 index-perf，云端每日可刷新，是稳定的同源续接来源。
+
+    只增不改：已有日期一律不动，只补旧缓存末日之后、tc 中存在且属于
+    真实交易日的行。任何异常都静默沿用原缓存，绝不抛断整轮。
+    """
+    try:
+        p = os.path.join(CACHE, "tc_000985_ohlc.csv")
+        if not os.path.exists(p):
+            return old
+        tc = pd.read_csv(p, dtype={"date": str})
+        if tc.empty or "close" not in tc.columns:
+            return old
+        cal = _zz_trade_calendar()
+        have = set(old["date"].astype(str))
+        last = max(have) if have else ""
+        add = []
+        for _, r in tc.iterrows():
+            ds = str(r["date"]).replace("-", "")
+            if len(ds) != 8 or not ds.isdigit() or ds <= last or ds in have:
+                continue
+            if cal and ds not in cal:      # 过滤非交易日填充行
+                continue
+            try:
+                cv = float(r["close"])
+            except (TypeError, ValueError):
+                continue
+            if cv != cv:                  # NaN
+                continue
+            add.append({"date": ds, "close": cv})
+            have.add(ds)
+        if add:
+            old = pd.concat([old, pd.DataFrame(add)], ignore_index=True)
+            log("  ⛔ 护栏1: tc_000985_ohlc 同源续接 zzqz985 +%d 行 (%s~%s)"
+                % (len(add), add[0]["date"], add[-1]["date"]))
+        return old
+    except Exception as e:
+        log("  ⛔ 护栏1: tc 续接失败（沿用原缓存）: %s" % e)
+        return old
+
+
 def fetch_zzqz985():
     """中证全指(000985)日收盘，走中证官网分块回填(2005 起)，缓存 cache/zzqz985.csv（date=YYYYMMDD, close）"""
     ck = "zzqz985"
@@ -867,6 +980,9 @@ def fetch_zzqz985():
         time.sleep(SLEEP)
     if old is None or len(old) == 0:
         return None
+    # 【护栏 1 · 2026-11-08】中证 csindex_api 被 WAF 熔断时，zzqz985.csv 会停在旧日期，
+    # M4 叠加线随后被 ffill 拉成一条直线（不报错，静默出错）。此处用同源 tc 缓存续接。
+    old = _zz_backfill_from_tc(old)
     save(ck, old)
     s = pd.Series(old["close"].astype(float).values, index=pd.to_datetime(old["date"]))
     return s[~s.index.duplicated(keep="last")].sort_index()
@@ -1568,6 +1684,19 @@ def main(deep=True):
         if len(idx) < 400:
             return
         a, b = a.reindex(idx).ffill(), b.reindex(idx).ffill()
+        # 【护栏 2 · 2026-11-08】比值计算前拦截水平值串线断崖。
+        # 断崖出现时统一截断 idx，使 cur.date 与曲线末端一致。
+        a, ja = _guard_level_jump(a, "%s:%s" % (mid, la))
+        b, jb = _guard_level_jump(b, "%s:%s" % (mid, lb))
+        cuts = [j for j in (ja, jb) if j is not None]
+        if cuts:
+            _cut = min(cuts)
+            if _cut <= 0:
+                log("  ⛔ 护栏2: %s 序列起始即断崖，跳过该模块" % mid)
+                return
+            log("  ⛔ 护栏2: %s 截断到 %s（保留 %d 日）" % (mid, idx[_cut - 1].date(), _cut))
+            idx = idx[:_cut]
+            a, b = a.iloc[:_cut], b.iloc[:_cut]
         ratio = a / b
         midr, up, dn = boll(ratio, 252, 2)
         ma5 = ratio.rolling(1250).mean()
