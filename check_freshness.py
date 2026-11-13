@@ -51,7 +51,9 @@ def main():
         print("::warning::数据停更告警：全站最新 %s，滞后卡片 %d 张；落后>=%d天的有 %d 张%s"
               % (latest, len(stale), GAP_DAYS, len(bad),
                  (" —— " + ", ".join(bad)) if bad else ""))
-        print("::warning::请检查中证官网直连与 a-stock-api /api/csindex 是否都失败；"
+        print("::warning::若两条取数通道日志均正常，这通常是上游 index-perf 发布节奏"
+              "（官方数据末日落后 1~2 个交易日，见 README 附录 L.10）：上游补发后每日增量会自动追回，"
+              "无需人工处理；仅当 gap 逐日扩大且通道日志异常时才按附录 L.4 排查。"
               "完整清单见 data.json 的 stale 字段与 llms.txt「数据滞后提示」。")
     else:
         print("新鲜度检查：%d 张卡片滞后均 <%d 天（最新日 %s），属正常披露节奏"
