@@ -89,6 +89,17 @@ jobs:
             exit 0
           fi
 
+      - name: 数据新鲜度告警（P0 · 2026-11-13）
+        # 中证官网 WAF 曾让多张卡片连续多日「沿用旧缓存」而 workflow 仍 success、
+        # 日志只有一行不起眼的跳过提示（用户看到的是「数据日期差原版好几天」）。
+        # 主取数现已能经 /api/csindex 自愈，这里只做最后一道可见性兜底：
+        # 落后 >=2 天或 >=8 张卡片同时滞后时打 ::warning::，绝不 fail 整轮
+        #（节假日 / 披露滞后属正常，见 README 第十一部分维护须知）。
+        # 摘要文件自带「数据滞后提示」段，无需在这里重复生成。
+        env:
+          TZ: Asia/Shanghai
+        run: python3 check_freshness.py
+
       - name: 提交并推送
         run: |
           # 数据有效性守卫：关键产物必须存在、非空且 JSON 合法。

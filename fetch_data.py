@@ -228,17 +228,80 @@ def _csi_waf_clear():
         pass
 
 
+# ----------------------------------------------------------- 中证 WAF 通道自愈（2026-11-13）
+# 根因：GitHub Actions 的 Azure 出口 IP 段被中证官网 WAF 限流（403），一旦触发全局熔断，
+#   本轮所有 csi*.csv 一律「沿用旧缓存」，数据日期连续多日冻结，而 workflow 仍 success。
+#   实测 11-03~11-13 连续 10 次运行无一例外，19 个指标全部落后原版 1~2 天。
+# 实证：同一个官方 API（www.csindex.com.cn/csindex-home/perf/index-perf）经自建
+#   a-stock-api 的 /api/csindex 从 Cloudflare 出口请求可正常返回；本沙箱与 GH Actions
+#   均能访问 workers.dev（M14 两融账户已在用）。两者 close 逐值一致：000300 / 930903 /
+#   H00300 等 9 个重叠交易日对拍 0 差异；date 归一化后与直连 tradeDate 完全对齐。
+# 因此这【不是换数据源】，只是给同一官方 API 增加一条传输通道：
+#   数据源、字段、单位、口径、判定阈值、cron、构建顺序、cache/ 一律不动；
+#   Worker 仓库一行不改、不重新部署（端点与契约早已上线，见 a-stock-api README §2）。
+# 设计沿用本仓既有「加速层 + 回退链」惯例（见 M14 的 a-stock-api → akshare → cache）：
+#   ① 直连 403 → 先试 Worker，成功即等价于直连成功（不熔断、不沿用旧缓存）；
+#   ② 本轮一旦确认直连被封，后续中证请求直接走 Worker，不再逐只白撞 6s 退避；
+#   ③ Worker 也失败 → 原有熔断 / 冷却 / 沿用旧缓存逻辑完整保留（第三层兜底），
+#      且 workflow 的 check_freshness.py 会打 ::warning:: 让停更立刻可见。
+CSI_VIA_WORKER = [False]
+
+
+def _csindex_via_worker(code, start, end):
+    """经自建 a-stock-api /api/csindex 取同一官方 index-perf 数据。
+
+    返回与 csindex_api 直连完全同形的 DataFrame(date=YYYYMMDD, close)；
+    任何失败返回 None，由调用方回退。复用文件后半段的 _api_json（运行时解析，
+    不重试、超时 30s，与 M14 用法一致），不新增任何依赖。
+    """
+    try:
+        j = _api_json("/api/csindex", {"symbol": code, "start": start, "end": end})
+        if not j:
+            return None
+        rows = j.get("data") or []
+        if not isinstance(rows, list) or not rows:
+            return None
+        rec = []
+        for x in rows:
+            if not isinstance(x, dict):
+                continue
+            d = str(x.get("date") or "").replace("-", "")
+            c = x.get("close")
+            if len(d) != 8 or not d.isdigit() or c is None:
+                continue
+            try:
+                c = float(c)
+            except (TypeError, ValueError):
+                continue
+            if c != c:                       # NaN
+                continue
+            rec.append((d, c))
+        if not rec:
+            return None
+        return pd.DataFrame(rec, columns=["date", "close"])
+    except Exception:
+        return None
+
+
 def csindex_api(code, start, end, tries=3):
-    if code in CSI_BAD:
-        log(f"    ⏭ {code} {start}~{end} 跳过：本轮已确认 403，不再重试")
-        return pd.DataFrame(columns=["date", "close"])
+    # 【熔断已打开】Worker 也失败过 → 整轮跳过，避免每只再空等 30s
     if CSI_BLOCKED[0]:
         log(f"    ⏭ {code} {start}~{end} 跳过：本轮中证源已熔断，沿用旧缓存")
         return pd.DataFrame(columns=["date", "close"])
-    if _csi_waf_active():
+    # 【通道自愈】本轮已判定直连被封 / 处于冷却期 → 直接走 Worker，不再白撞 403
+    if CSI_VIA_WORKER[0] or _csi_waf_active():
+        wk = _csindex_via_worker(code, start, end)
+        if wk is not None and not wk.empty:
+            if not CSI_VIA_WORKER[0]:
+                CSI_VIA_WORKER[0] = True
+                log("    中证直连冷却期 → 本轮改走自建 a-stock-api /api/csindex（同源同值）")
+            return wk
         CSI_BLOCKED[0] = True
-        log(f"    中证官网限流冷却期内（{CSI_WAF_COOLDOWN_MIN:.0f} min），本轮跳过中证源（不消耗请求）")
-        log(f"    ⏭ {code} {start}~{end} 跳过：沿用旧缓存")
+        _csi_waf_trip()
+        log(f"    ⚠ {code} Worker 通道亦失败 → 熔断，沿用旧缓存（P0 告警会提示）")
+        return pd.DataFrame(columns=["date", "close"])
+    if code in CSI_BAD:
+        log(f"    ⏭ {code} {start}~{end} 跳过：本轮已确认 403，不再重试")
         return pd.DataFrame(columns=["date", "close"])
     s = csi_sess()
     _n403 = 0
@@ -250,6 +313,20 @@ def csindex_api(code, start, end, tries=3):
             r = s.get("https://www.csindex.com.cn/csindex-home/perf/index-perf",
                       params={"indexCode": code, "startDate": start, "endDate": end}, timeout=45)
             if r.status_code == 403:
+                # 【通道自愈 · 2026-11-13】直连 403 先试 Worker：同一个官方 index-perf，
+                # Cloudflare 出口不受 GitHub Actions 的 Azure IP 段限流影响。
+                # 实测 close 逐值一致，故成功即等价于直连成功：不熔断、不沿用旧缓存。
+                _wk = _csindex_via_worker(code, start, end)
+                if _wk is not None and not _wk.empty:
+                    if not CSI_VIA_WORKER[0]:
+                        CSI_VIA_WORKER[0] = True
+                        log("    中证直连 403（IP 级限流）→ 改走自建 a-stock-api /api/csindex；"
+                            "本轮后续中证请求直接走 Worker（同一官方 API，口径/阈值不变）")
+                    CSI_BLOCKED[1] = 0
+                    CSI_BLOCKED[2] = None
+                    _csi_waf_clear()
+                    return _wk
+                # Worker 也不可用 → 完整保留原有熔断 / 退避 / 沿用旧缓存逻辑
                 if code != CSI_BLOCKED[2]:
                     CSI_BLOCKED[2] = code
                     CSI_BLOCKED[1] += 1
@@ -874,6 +951,24 @@ def _zz_trade_calendar():
                     cal.add(_ds)
         except Exception:
             continue
+    # 【护栏 1 自指陷阱修复 · 2026-11-13】上面 5 份 csi*.csv 全部走中证官网，
+    # WAF 熔断时会【一起】冻结在旧日期，于是最新的真实交易日不在 cal 里，
+    # _zz_backfill_from_tc 反而把它当「非交易日填充行」过滤掉 —— 护栏静默失效
+    # （2026-11 实测：tc 已到 11-12，zzqz985 仍停 11-11，M4 继续被 ffill 拉直线）。
+    # tc_000985_ohlc.csv 走腾讯 K 线通道，云端每日可刷新，且附录 K.4 已证明它与
+    # zzqz985.csv 是同一份中证全指官方收盘（5289 个重叠交易日逐值一致）。
+    # 把它的日期并入并集：中证源整条冻结时，护栏 1 仍能正确识别交易日并续接。
+    # 腾讯 K 线本身就是真实交易日序列，不会引入周末填充行（K.4 记录的那类坑）。
+    _tp = os.path.join(CACHE, "tc_000985_ohlc.csv")
+    if os.path.exists(_tp):
+        try:
+            _t = pd.read_csv(_tp, dtype={"date": str})
+            for _x in _t["date"]:
+                _ds = str(_x).replace("-", "")
+                if len(_ds) == 8 and _ds.isdigit():
+                    cal.add(_ds)
+        except Exception:
+            pass
     return cal
 
 

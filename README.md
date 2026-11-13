@@ -635,7 +635,7 @@
 
 | 用途 | 来源 | 频率 / 说明 |
 |---|---|---|
-| 中证系指数日线（930xxx / H11xxx / 000xxx） | 中证指数官网 | 分段回补 + 增量；官网有 WAF 限流，脚本内置退避 |
+| 中证系指数日线（930xxx / H11xxx / 000xxx） | 中证指数官网（云端直连被 WAF 限流时经自建 `a-stock-api` 的 `/api/csindex` 转发**同一个官方 API**） | 分段回补 + 增量；官网有 WAF 限流，脚本内置退避 + 通道自愈（见附录 L）。**不是换数据源，字段/单位/口径/阈值一律不变** |
 | 全收益指数（H00300 / H00922 等） | 中证指数官网 | 官方口径，含分红再投 |
 | 国证系指数（399370 / 399371） | 国证指数网 | 日频全历史，2005 年至今 |
 | 沪深 / 深证系指数日线 | 腾讯行情 | **兜底源**，仅在官方源失败时启用 |
@@ -678,7 +678,9 @@ schedule:
   - cron: '30 10 * * *'   # 10:30 UTC = 18:30 北京时间
 ```
 
-工作流做的事：装依赖 → 判断缓存充不充足（`cache/csi*.csv` ≥ 15 个走 `--quick` 增量模式）→ 跑 `fetch_data.py` → 跑 `build.py` 打包 → 生成 `llms.txt` 等 AI 摘要 → 提交 `index.html anchor_v2.html data.json version.txt llms.txt snapshot.md latest.json cache/`。内容没有变化时自动跳过提交。
+工作流做的事：装依赖 → 判断缓存充不充足（`cache/csi*.csv` ≥ 15 个走 `--quick` 增量模式）→ 跑 `fetch_data.py` → 跑 `build.py` 打包 → 生成 `llms.txt` 等 AI 摘要 → **数据新鲜度告警** → 提交 `index.html anchor_v2.html data.json version.txt llms.txt snapshot.md latest.json cache/`。内容没有变化时自动跳过提交。
+
+> **2026-11-13 新增一道可见性兜底**：提交前跑 `check_freshness.py`，若 `data.json` 里仍有卡片落后全站最新日 ≥2 天、或 ≥8 张卡片同时滞后，就打 `::warning::`（**绝不 fail 整轮**，节假日 / 披露滞后属正常）。中证官网 WAF 曾让 12 张卡片连续多日「沿用旧缓存」而 workflow 仍 `success`、日志只有一行不起眼的跳过提示，告警让这类停更立刻可见。主取数本身已能经 `/api/csindex` 自愈，详见附录 L。
 
 > `data.js` 不在提交列表里：它是 `data.json` 的副本（`window.DATA=` + JSON），纯冗余。`build.py` 发现缺失会自动现生成。
 
@@ -901,6 +903,7 @@ FRED 同样会被封）。所以密钥一律走 `setGeminiKey` / `setFredKey` �
 | 指标 | 现用端点 | 说明 |
 | --- | --- | --- |
 | M14 两融担保比例 | `GET /api/margin-account?start=2012-09-01&max_pages=12` | 2026-11-04 接入。取 `data[].avg_guarantee_ratio`（东财 `RPTA_WEB_MARGIN_DAILYTRADE` 的 `AVG_GUARANTEE_RATIO`），与原来的 `ak.stock_margin_account_info()` **同一张表、同一字段**。 |
+| 全部中证系指数日线（17 份 `csi*.csv` + `zzqz985`） | `GET /api/csindex?symbol=<code>&start=YYYYMMDD&end=YYYYMMDD` | 2026-11-13 接入，**仅作云端直连 403 时的传输通道**：Worker 请求的仍是 `www.csindex.com.cn/csindex-home/perf/index-perf` 同一个官方 API，字段/单位/口径/判定阈值一律不变；Worker 仓库零改动、不重新部署。详见附录 L。 |
 
 接入时做过逐日对拍：端点 3420 行 → 剔掉 70 个 `null` 后 3350 行，与旧序列 3349 行完全重合、只多最新一天；
 **除 `pack(nd=2)` 的两位小数截断外，0 天数值不一致**，全样本极值 `low 208.81` / `high 308.3` 也一字不差。
@@ -944,6 +947,7 @@ make_llm_summary.py → llms.txt / snapshot.md / latest.json（AI 摘要）
 
 【数据源】
 - 中证指数官网（主）：930xxx / H11xxx / 000xxx 日线，有 WAF 限流，脚本内置退避；backfill.py 专治历史空洞。
+  **云端直连 403 时自动改走 a-stock-api `/api/csindex`（同一官方 API、同源同值）：这不是换数据源，口径/阈值不变**（见附录 L）。
 - 国证指数网：399370 / 399371。
 - 腾讯行情：沪深/深证系指数**兜底**，仅官方源失败时启用。
 - 乐咕乐股：沪深300 / 上证红利 的 PE、PB（月频，唯一仍在用的第三方长周期源）。
@@ -1289,3 +1293,113 @@ ValueError: 'M' is no longer supported for offsets. Please use 'ME' instead.
 6. **不要手改 `index.html` / `llms.txt` / `snapshot.md` / `latest.json`**；产物由 `build.py` / `make_llm_summary.py` 生成，且 `version.txt` 必须随提交（维护须知第 2、4、8 条）。
 7. **遇到「页面看起来挂了」先分三层**：① 站点 / 聚合页 HTTP 状态 → ② 页面 DOM 是否渲染、有没有空白卡和 JS 报错 → ③ `window.DATA` 里的数值本身。本仓 6 个面板由 `wj-dashboards.pages.dev` iframe 懒加载，聚合页正常**不代表**子页数据正确。
 8. **线上写操作照旧**：精确 `git add`（白名单）、中文 commit、`git pull --rebase`、**绝不 `--force`**；完整产物由 `update.yml` 的 `git add index.html anchor_v2.html data.json version.txt cache/` + 三份摘要负责提交。
+
+
+---
+
+## 附录 · 2026-11-13 中证 WAF 熔断「连续停更」根治（给维护者 / 给 AI 读）
+
+> **这节是什么**：用户报告「自动运行过程中很多数据连续多天熔断，与原版数据日期差了好几天」。
+> 诊断确认是**静默停更**，随后用户追问「只做 P0-P1 下次还会遇到吗？能自愈吗？若确定不了能自愈，
+> 就按你说的来，我需要不留隐患解决」。本附录记录：为什么 P0-P1 不能自愈、最终怎么根治、
+> 实证与回滚，让下一次维护不用重新排查一遍。
+>
+> **改动前已完整读**「第十一部分 · 维护须知」（8 条）、「第十三部分 · 给 AI 的维护提示词」
+> 与附录 K（11-08 静默数据错误）。本节不新增、不覆盖其中任何一条铁律。
+
+### L.1 一句话结论
+
+**P0-P1 不能自愈，本次做的是能自愈的根治 + 两层兜底。**
+
+| 方案 | 做什么 | 下次 403 会怎样 | 能自愈吗 |
+| --- | --- | --- | --- |
+| 只做 P0 | 把 `stale` 变成 workflow `::warning::` | 数据照样停更，只是**看得见** | ❌ |
+| 只做 P1 | 修护栏 1 的自指交易日历 | 只有 M4 一条叠加线不拉直线，其余 18 个指标照样停更 | ❌ |
+| P0 + P1 | 上面两者相加 | 19 个指标数据日仍冻结，多一条告警 | ❌ |
+| **本次（根治 + P0 + P1）** | 直连 403 → 自动走 Worker 取同一官方数据 | **数据日照常前进**，与原版对齐 | ✅ |
+
+原因很直接：P0 是「告警」、P1 是「局部症状修复」，**两者都没碰「云 IP 403 → 全局熔断 → 沿用旧缓存」这条根链路**。
+403 在 11-03~11-13 连续 10 次运行里天天出现，几乎必然再来，所以只做 P0-P1 下次照样差好几天。
+
+### L.2 根因（诊断证据链）
+
+- **连续 10 次运行（11-03~11-13）天天触发全局熔断**，每次 5~11 次 403，无一例外。
+- 17 份 `csi*.csv` + `sw807330.csv` + `zzqz985.csv` 全部冻结在 `20261111`；腾讯 / 国证 / 乐咕 / 利率等旁路都到 `20261112` —— **只有中证官网这一条链路断了**。
+- 本仓 `11-13 02:30` 更新、全站到 11-12；原版 `11-13 21:19` 更新、多数到 11-13。**19 个指标无一领先，全部落后 1~2 天**，`data.json` 的 `stale` 自己就列了 12 张滞后卡片。
+- `workflow` 的守卫只查「文件存在 + JSON 合法」，**不查数据日期**，所以停更 10 天照样 `success`。
+- **原版为什么没事**：原作者停用云端定时任务改本机跑（本机 IP 不撞中证 WAF），且原版代码有 `--no-csi` 把中证尾部取数从主流程剥离；其仓库里 `cache/*.csv` 其实停在 10 月，本机缓存不入库。原版熔断阈值甚至更敏感（`2`），根本用不上。
+
+### L.3 三个让停更「无法自愈」的设计缺陷（本次全部处理前三个里的关键项）
+
+1. **备用源形同虚设**：`fetch_all()` 里 `same=False` 的腾讯备用，只要主源返回 ≥250 行旧缓存就完全跳过。带 `same=True` 的 `000300/000922/000852/000015` 能合并到 11-12，而 `930903/931589/931586` 和 11 个无备用系列只能停在 11-11。**这条不能简单改成 `True`** —— 会重演附录 K 修过的全收益 / 价格指数串线。本次**不碰 `same` 标记**，改从传输通道解决。
+2. **护栏 1 自指失效**（= P1）：11-08 加的 `tc_000985_ohlc` 同源续接，其交易日历取自 5 份**同样被冻结**的 `csi*.csv`，导致 11-12 那行被过滤。日志里「腾讯兜底补齐至 11-12」有，但「护栏1 续接 zzqz985」一次都没出现。本次修日历并集。
+3. **`stale` 只写文件、不告警**（= P0）：workflow 不检查数据日期。本次加 `check_freshness.py`。
+
+> 另发现一个**不影响根因的时间异常**：cron 写 `30 10 * * *`（北京 18:30），但 10 次 schedule 实际落在北京 `00:33~04:52`，偏移约 8 小时。这让本仓「次日凌晨抓数」天然拿不到当日收盘、比原版「当天傍晚抓数」晚一天，叠加熔断把体感差距放大。**本次不改 cron**（GitHub 调度延迟属平台行为，改 cron 收益不确定且属于「改调度」），根治后数据按最新交易日前进，体感差距消失。
+
+### L.4 根治方案：三层防护，无单点
+
+**为什么能确定自愈**：中证官网 403 是 **GitHub Actions 的 Azure 出口 IP 段被限流**，不是数据源没了、也不是请求头不对。
+
+- 实测：本沙箱（腾讯云海外 IP `43.134.172.85`）对**所有日志里 403 的代码**（`H00300`/`H00922`/`931586CNY01`/`931591`/`930950`/`930903`/`931589`/`000985`/`H11023`）全部 HTTP 200，UA 用 `python-requests` 或 Chrome 都一样 → 不是「云 IP 一律封」，也不是 UA 被拦。
+- 实测：GH Actions runner 能正常访问 `a-stock-api.wj4020410.workers.dev`（日志 `M14 a-stock-api 两融账户 OK（3356 行）`）。
+- **关键发现**：`a-stock-api` 里**早已上线** `GET /api/csindex`，注释写明「中证自定义指数日线，中证指数官网 `csindex.com.cn`」，源码用的就是**同一个官方 URL** `https://www.csindex.com.cn/csindex-home/perf/index-perf`（参数 `indexCode`/`startDate`/`endDate`）。从 Cloudflare 出口请求它，本沙箱实测 8 个代码全部返回 `count:9` 条日线。
+
+| 层 | 动作 | 失败时 |
+| --- | --- | --- |
+| **① 通道自愈（根治）** | `csindex_api()` 直连 403 → 先试 `/api/csindex`，成功即等价于直连成功：**不熔断、不沿用旧缓存**；本轮一旦确认直连被封，后续中证请求直接走 Worker，不再逐只白撞 6s 退避 | ② |
+| **② 原有熔断（保留）** | Worker 也失败 → 原有「3 个不同代码 403 → 熔断 / 12min 冷却 / 沿用旧缓存」逻辑**一字不动**地兜底 | ③ |
+| **③ P0 可见性兜底** | `check_freshness.py` 落后 ≥2 天或 ≥8 张卡片同时滞后时打 `::warning::`，`llms.txt` 自带「数据滞后提示」段 | 停更立刻可见，不再静默 |
+
+**这不是换数据源**：源仍是中证官网同一个官方 API；Worker 只是转发，字段名 / 单位 / 日期口径 / 指标水平值 / 判定阈值 / cron / 构建顺序 / `cache/` 一律不动。因此按第十一部分第 7 条，**`template.html`、`make_llm_summary.py` 的 `META`/`reading()`、`build.py` 的阈值、第七部分口径替代表均无需改动**；本附录只做「四处置入说明 + 记录」。**Worker 仓库一行未改、未重新部署**（端点与契约早已上线，符合 `a-stock-api` README §0 铁律「只做代理、不改响应结构」）。
+
+### L.5 同源同值实证（零口径风险的依据）
+
+| 对拍 | 结果 |
+| --- | --- |
+| 直连 `index-perf` vs `/api/csindex`，`000300` / `930903` / `H00300` 各 9 个重叠交易日 `close` | **逐值一致，0 处不符** |
+| 直连 `tradeDate` = `20261101` vs Worker `date` = `2026-11-01` | 归一化后**完全一致** |
+| Worker 返回 `count:9`（含 `931586CNY01`、`H00300` 等全收益 / 主题系列） | 全部 HTTP 200，无空数据 |
+| M14 已在用同一 Worker | GH Actions 访问 `workers.dev` 无阻碍 |
+
+`_csindex_via_worker()` 把 Worker 的 `date` 归一化成 `YYYYMMDD`，返回与直连**完全同形**的 `DataFrame(date, close)`，下游 `fetch_csi` / `merge` / `save` 不用改一行。
+
+### L.6 逐文件改动（2026-11-13）
+
+| 文件 | 改动 | 为什么 |
+| --- | --- | --- |
+| `fetch_data.py` | 新增 `CSI_VIA_WORKER` + `_csindex_via_worker()`；改写 `csindex_api()` 开头与 403 分支；`_zz_trade_calendar()` 并入 `tc_000985_ohlc.csv` 日期 | 通道自愈（①）+ 修护栏 1 自指（P1）。纯增量，**原熔断阈值 3 / 退避 6s / 冷却 12min / `SLEEP=3.5` / `CHUNK_YEARS=6` 一字未动** |
+| `check_freshness.py`（新增） | 只读 `data.json` 的 `latest`/`stale`，异常时打 `::warning::` | P0。**不写文件、不改产物、绝不 `exit 1`**；摘要自带滞后提示，无需重复生成 |
+| `.github/workflows/update.yml` | 在「提交并推送」前加一步 `python3 check_freshness.py` | P0 接入流水线。**cron、依赖锁 `pandas<3`、`TZ=Asia/Shanghai`、`git add` 白名单全部未改** |
+| `README.md` | 第六部分数据源表、第八部分自动更新、13.3 已接入表、13.4 提示词数据源段、本附录 | 按第 11 部分第 7 条与 13.4【收尾】同步 |
+
+**明确没动**：`a-stock-api`（Worker 仓库）、`template.html`、`make_llm_summary.py`、`build.py`、`requirements.txt`、`cache/` 任何文件、任何产物、`version.txt`、cron、`SERIES` 的 `same` 标记、护栏 2 `_guard_level_jump()`、1287 行 M1 的独立中证直连（它**已有腾讯日线兜底**，实测补齐到 11-12，不构成隐患）。
+
+### L.7 验证
+
+**本地（隔离验证，不跑完整 `fetch_data.py` —— 本地 pandas 3.0 ≠ 线上 `<3`，见附录 K.7）**
+
+| 脚本 | 结果 |
+| --- | --- |
+| `fix_earl_waf.py` 静态校验 | **22 PASS / 0 FAIL**：4 处原子替换唯一命中、纯 CRLF 无 BOM、`ast.parse` / `yaml.safe_load` OK、cron / 依赖锁 / 白名单 / 原熔断参数全未变 |
+| `verify_earl_waf.py` 隔离功能验证 | **26 PASS / 0 FAIL**：AST 抽出 4 个真函数，注入真实 Worker 响应与模拟 403 —— ① 403 后拿到 9 行真实数据、`date` 归一化、`close` 逐值一致、**不熔断**、只直连 1 次；② 后续 2 只直接走 Worker、全程只直连 1 次；③ Worker 也挂时 3 个不同代码后**原熔断完整触发**；④ csi 全冻结时护栏 1 仍补出 `20261112` 且只增不改；⑤ P0 在事故态（12 张滞后）打 `::warning::`、健康态静默、`rc=0` |
+
+**云端实测**：见 L.8 回填记录。
+
+### L.8 云端 workflow 实测记录（2026-11-13 回填）
+
+> 待 `daily` workflow 手动 dispatch 实测后回填（run id / 结论 / 是否出现通道切换日志 /
+> `csi*.csv` 末日 / `stale` 卡片数 / 与原版 `asof` 逐项对照 / 产物自动提交 sha）。
+
+### L.9 给 AI 的维护边界（复制这段）
+
+1. **不要把 `/api/csindex` 当成「换了数据源」**：它转发的是中证官网同一个 `index-perf`，字段/单位/口径/阈值都没变。任何「换源要四处一起改 + 重设阈值」的动作在这里**不适用**；真换源时照旧按第 11 部分第 7 条办。
+2. **不要删 `CSI_VIA_WORKER` / `_csindex_via_worker`**，也不要把 Worker 回退挪到熔断之后 —— 一旦熔断打开，整轮 `fetch_csi` 会直接跳过，自愈就失效了。
+3. **不要改 Worker 仓库的 `/api/csindex` 响应结构**（`date`/`close` 字段名与含义），见 `a-stock-api` README §0「响应结构是契约」。本仓 `_csindex_via_worker()` 依赖 `date` 可归一化成 `YYYYMMDD`、`close` 为数值。
+4. **Worker 也失败时不要强行重试或改 `same` 标记**：原有熔断 / 冷却 / 沿用旧缓存是第三层兜底，P0 告警会让它可见。批量改 `same=True` 会重演附录 K 的全收益 / 价格指数串线。
+5. **不要改 `check_freshness.py` 让它 `exit 1`**：节假日 / 披露节奏差异属正常，局部容错是设计（附录 C）。摘要的「数据滞后提示」段由 `make_llm_summary.py` 生成，别在这里重复写。
+6. **不要修 cron 时间异常**（L.3 已说明）：它不影响数据口径自愈，改调度收益不确定，且属于「改 cron」需同步第八部分。
+7. **护栏 1 的交易日历必须包含 `tc_000985_ohlc.csv`**：它是唯一在中证源整条冻结时仍刷新的同源序列，删掉会退回 11-08 之后那个「护栏静默失效」的状态。
+8. **线上写操作照旧**：精确 `git add`（白名单）、中文 commit、`git pull --rebase`、**绝不 `--force`**；完整产物由 `update.yml` 提交。
+
+**回滚**：`git revert <本修复 commit>` 即可。`fetch_data.py` 是纯增量函数 + 两处分支、`check_freshness.py` 是新增独立脚本、`update.yml` 只加一步，回滚不影响任何 `cache/`、口径或产物；但回滚后「中证 403 → 连续停更」会原样复发，P0 告警也会消失。
