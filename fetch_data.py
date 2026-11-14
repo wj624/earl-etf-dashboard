@@ -4,6 +4,16 @@ EarlETF 图表周刊 · 指标自动计算引擎
 多源抓取 -> 本地缓存(断点续传) -> 计算 11 个模块 -> 输出 data.json / data.js
 """
 import os, io, sys, json, time, math, bisect, warnings, datetime as dt, tempfile
+
+
+# 自建 Worker 鉴权：密钥只从环境变量读取，绝不写进代码或提交历史
+def _worker_headers(extra=None):
+    h = dict(extra or {})
+    k = os.environ.get("A_STOCK_API_KEY", "")
+    if k:
+        h["X-API-Key"] = k
+    return h
+
 import requests
 import numpy as np
 import pandas as pd
@@ -575,7 +585,7 @@ def _api_json(path, params=None, timeout=30):
     """GET 自建 API，返回 dict；任何失败都返回 None（调用方据此回退）。"""
     try:
         r = requests.get(API_BASE + path, params=params or {}, timeout=timeout,
-                         headers={"User-Agent": UA})
+                         headers=_worker_headers({"User-Agent": UA}))
         if r.status_code != 200:
             log(f"    API {path} HTTP {r.status_code}")
             return None
